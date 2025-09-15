@@ -1,0 +1,89 @@
+{% extends "admin/base.html" %}
+
+{% block title %}反馈管理{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">反馈管理</h1>
+    <form class="d-flex" method="get">
+        <select class="form-select me-2" name="status">
+            <option value="">全部状态</option>
+            <option value="new" {{ 'selected' if status_filter=='new' else '' }}>未处理</option>
+            <option value="in_progress" {{ 'selected' if status_filter=='in_progress' else '' }}>处理中</option>
+            <option value="resolved" {{ 'selected' if status_filter=='resolved' else '' }}>已解决</option>
+            <option value="archived" {{ 'selected' if status_filter=='archived' else '' }}>已归档</option>
+        </select>
+        <button class="btn btn-outline-primary" type="submit">筛选</button>
+    </form>
+    
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="ms-3">
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }} py-1 px-2 mb-1">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+</div>
+
+{% if feedback %}
+<div class="row g-3">
+    {% for item in feedback %}
+    <div class="col-12 col-md-6">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div class="text-muted small">{{ item.submitted_at }}</div>
+                    <span class="badge {% if item.status=='new' %}bg-secondary{% elif item.status=='in_progress' %}bg-info{% elif item.status=='resolved' %}bg-success{% else %}bg-dark{% endif %}">{{ item.status or 'new' }}</span>
+                </div>
+                <div class="mb-2">
+                    <div class="fw-bold">来自：{{ item.username or '未设置用户名' }}</div>
+                    <div class="text-muted small"><i class="bi bi-envelope me-1"></i> {{ item.email }}</div>
+                </div>
+                <p class="mb-2" style="white-space: pre-wrap;">{{ item.description }}</p>
+                {% if item.image_paths and item.image_paths|length > 0 %}
+                <div class="d-flex flex-wrap gap-2 mb-2">
+                    {% for img in item.image_paths %}
+                    <a href="{{ img }}" target="_blank">
+                        <img src="{{ img }}" alt="反馈图片" style="max-width: 120px; max-height: 120px; border-radius: 12px;"/>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="card-footer bg-transparent">
+                <form class="d-inline" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="status" value="new"/>
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">未处理</button>
+                </form>
+                <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="status" value="in_progress"/>
+                    <button type="submit" class="btn btn-sm btn-outline-info">处理中</button>
+                </form>
+                <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="status" value="resolved"/>
+                    <button type="submit" class="btn btn-sm btn-outline-success">已解决</button>
+                </form>
+                <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="status" value="archived"/>
+                    <button type="submit" class="btn btn-sm btn-outline-dark">归档</button>
+                </form>
+                <form class="d-inline float-end" method="post" action="{{ url_for('payment_bp.admin_feedback_reply', feedback_id=item.id) }}">
+                    <div class="input-group input-group-sm" style="max-width: 420px;">
+                        <input type="text" name="reply" class="form-control" placeholder="输入要发送给用户的消息...">
+                        <button class="btn btn-primary" type="submit"><i class="bi bi-send"></i> 发送</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-light">暂无反馈</div>
+{% endif %}
+
+{% endblock %}
+
+

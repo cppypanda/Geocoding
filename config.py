@@ -1,0 +1,5 @@
+# 用户相关配置
+NO_PASSWORD_PLACEHOLDER = 'not_set'
+NEW_USER_REWARD_POINTS = 1000
+
+# 数据库文件路径 

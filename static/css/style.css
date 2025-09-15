@@ -1,0 +1,298 @@
+.location-type-tag {
+    padding: 5px 12px;
+    background-color: #eef2ff;
+    border: 1px solid #e0e7ff;
+    border-radius: 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #4f46e5;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s ease-in-out;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.location-type-tag:hover {
+    background-color: #e0e7ff;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    transform: translateY(-1px);
+}
+
+.remove-tag {
+    cursor: pointer;
+    font-weight: bold;
+    color: #818cf8;
+    font-size: 20px;
+    line-height: 1;
+    transition: color 0.2s ease;
+}
+
+.remove-tag:hover {
+    color: #4f46e5;
+}
+
+#locationTypeTagsWrapper {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border: 1px dashed #ced4da;
+    border-radius: 0.25rem;
+    background-color: #f8f9fa;
+}
+
+/* POI标记样式 */
+.poi-marker {
+    background: transparent !important;
+    border: none !important;
+}
+
+/* 智能地址情报三步骤样式 */
+.steps-navigation {
+    position: relative;
+}
+
+.steps-navigation::before {
+    content: '';
+    position: absolute;
+    top: 20px;
+    left: 20%;
+    right: 20%;
+    height: 2px;
+    background: #e9ecef;
+    z-index: 1;
+}
+
+.step-item {
+    text-align: center;
+    position: relative;
+    z-index: 2;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.step-item.active .step-circle {
+    background-color: #0d6efd;
+    color: white;
+    border-color: #0d6efd;
+}
+
+.step-item.completed .step-circle {
+    background-color: #198754;
+    color: white;
+    border-color: #198754;
+}
+
+.step-item.completed .step-circle::after {
+    content: '✓';
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.step-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background-color: #f8f9fa;
+    border: 2px solid #dee2e6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 8px;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.step-item small {
+    font-size: 11px;
+    color: #6c757d;
+    font-weight: 500;
+}
+
+.step-item.active small {
+    color: #0d6efd;
+    font-weight: 600;
+}
+
+.step-item.completed small {
+    color: #198754;
+    font-weight: 600;
+}
+
+.step-content {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.current-address-display {
+    border-left: 4px solid #0d6efd;
+}
+
+/* 摘录列表样式 */
+.excerpt-item {
+    border-left: 3px solid #0d6efd;
+    background-color: #f8f9fa;
+}
+
+.excerpt-sources {
+    font-size: 11px;
+    color: #6c757d;
+}
+
+/* 验证结果样式 */
+.validation-success {
+    border-left: 4px solid #198754;
+    background-color: #d1e7dd;
+}
+
+.validation-failure {
+    border-left: 4px solid #dc3545;
+    background-color: #f8d7da;
+}
+
+/* 关键词建议样式 */
+.keyword-suggestion {
+    background-color: #fff3cd;
+    border-left: 4px solid #ffc107;
+    transition: all 0.2s ease;
+}
+
+.keyword-suggestion:hover {
+    background-color: #ffecb5;
+    transform: translateX(2px);
+}
+
+.keyword-strategy-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+}
+
+/* 步骤控制按钮样式 */
+.steps-controls {
+    border-top: 1px solid #dee2e6;
+    padding-top: 1rem;
+}
+
+.poi-marker-circle {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background-color: #007bff;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.poi-marker-circle:hover {
+    transform: scale(1.1);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+}
+
+.poi-marker-circle.selected {
+    background-color: #28a745;
+    border-color: #28a745;
+    box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.3);
+}
+
+/* POI弹窗样式 */
+.poi-popup {
+    min-width: 200px;
+}
+
+.poi-popup h6 {
+    color: #333;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.poi-popup p {
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+
+/* 搜索状态指示器样式 */
+#searchStatusIndicator {
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background-color: #f8f9fa;
+}
+
+/* 高级选项菜单样式 */
+#advancedOptionsMenu .card-body {
+    padding: 1rem;
+}
+
+#advancedOptionsMenu .btn {
+    text-align: left;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+#advancedOptionsMenu .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* POI搜索结果表格样式 */
+#mapSearchResultsTable {
+    font-size: 14px;
+}
+
+#mapSearchResultsTable th {
+    font-weight: 600;
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+}
+
+#mapSearchResultsTable .poi-select-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+#mapSearchResultsTable .poi-select-btn:hover {
+    transform: scale(1.05);
+}
+
+/* 渐进式披露动画 */
+.collapse {
+    transition: height 0.35s ease;
+}
+
+.collapsing {
+    transition: height 0.35s ease;
+}
+
+.leaflet-marker-icon.numbered-marker-icon {
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 50%;
+    background-color: #0d6efd;
+    background-image: none !important; /* 强制移除Leaflet默认背景 */
+    color: white;
+    display: flex !important; /* 强制flex布局以居中 */
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+} 

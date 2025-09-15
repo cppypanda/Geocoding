@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    
+    <title>陆梧GeoCo——地理编码工具</title>
+    <link rel="icon" href="{{ url_for('static', filename='logo.png') }}">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="top-user-bar container-fluid">
+        <div class="d-flex justify-content-end align-items-center py-2">
+            <!-- 未登录状态 -->
+            <div id="user-unsigned" class="user-actions">
+                <button type="button" class="btn btn-primary btn-sm me-2" id="showLoginModalBtn">登录</button>
+            </div>
+            <!-- 已登录状态 (示例，初始隐藏) -->
+            <div id="user-signed" class="user-actions d-none d-flex align-items-center">
+                <button type="button" class="btn btn-outline-info btn-sm me-2" id="showFreePointsModalBtn"><i class="bi bi-gift"></i> 免费赚积分</button>
+                <span class="me-2">积分: <span id="user-points">0</span></span>
+                <button type="button" class="btn btn-outline-success btn-sm me-2" id="showRechargeModalBtn">积分充值</button>
+                <div class="dropdown">
+                    <a href="#" class="me-2 position-relative" id="notification-bell-container" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-bell" style="font-size: 1.2rem;"></i>
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger d-none" id="notification-badge">
+                            <!-- 未读消息数量将由JS动态插入 -->
+                            <span class="visually-hidden">unread messages</span>
+                        </span>
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end shadow p-2" id="notification-dropdown-menu" aria-labelledby="notification-bell-container" style="width: 350px;">
+                        <!-- Notifications will be dynamically inserted here -->
+                        <li><span class="dropdown-item-text text-muted text-center d-block">正在加载...</span></li>
+                    </ul>
+                </div>
+                <span class="me-2">欢迎, <span id="username-display">用户</span></span>
+                <div class="dropdown">
+                    <a href="#" class="d-flex align-items-center text-decoration-none dropdown-toggle" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-person-circle fs-5 me-1"></i> <!-- Optional: user icon -->
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end text-small shadow" aria-labelledby="userDropdown">
+                        <li><a class="dropdown-item" href="#" id="showHelpModalBtn"><i class="bi bi-question-circle"></i> 使用教程</a></li>
+                        <li><a class="dropdown-item" href="#" id="settingsDropdownLink"><i class="bi bi-gear"></i> 设置</a></li>
+                        <li><a class="dropdown-item" href="#" id="showFeedbackModalBtn"><i class="bi bi-chat-dots"></i> 意见反馈</a></li>
+                        <li><a class="dropdown-item" href="#" id="rechargeBtn"><i class="bi bi-credit-card"></i> 账户充值</a></li>
+                        <li><a class="dropdown-item" href="#" id="my-tasks-btn"><i class="bi bi-card-checklist"></i> 我的任务</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="#" id="logoutBtn"><i class="bi bi-box-arrow-right"></i> 退出登录</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 免费赚积分横幅 -->
+    <div id="freePointsBanner" class="alert alert-warning alert-dismissible fade show d-none" role="alert" style="margin: 0; border-radius: 0; border-left: none; border-right: none;">
+        <div class="container-fluid">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="bi bi-gift me-2"></i>
+                    <strong>积分不足？</strong> 配置 API Key 即可获得免费积分奖励！
+                </div>
+                <div>
+                    <button type="button" class="btn btn-warning btn-sm me-2" id="bannerGetFreePointsLink">
+                        <i class="bi bi-arrow-right"></i> 立即获取
+                    </button>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <main class="main-container">
+        <!-- 地址输入区域 -->
+        <div class="address-input-section">
+            <div class="container text-center">
+                <div class="logo-container mb-4">
+                    <img src="{{ url_for('static', filename='logo.png') }}" alt="GeoCo Logo" class="img-fluid site-logo">
+                </div>
+                <h1 class="site-title mb-3">陆梧GeoCo: 智能地理位置引擎</h1>
+                <p class="site-slogan lead mb-5">粘贴地址，即刻获取精准坐标。支持批量处理与多源智能匹配。</p>
+                
+                <div class="row justify-content-center">
+                    <div class="col-lg-10 col-md-11">
+                        <div class="form-group mb-3 position-relative">
+                            <p class="text-muted mb-2">请将您的地址粘贴到下方输入框，每行一个地址。</p>
+                            <label for="addresses" class="form-label visually-hidden">请将您需要定位的地址粘贴到下方 (每行一个)</label>
+                            <div class="form-text text-muted mb-2">提示：采用"省、市、县、具体地名"的格式化地名，可以获得更准确的地理编码结果。</div>
+                            <textarea class="form-control address-textarea" id="addresses" rows="8" placeholder="例如：
+北京市海淀区中关村创业大街
+上海市浦东新区世纪大道88号金茂大厦
+四川省成都市武侯祠大街231号"></textarea>
+                            <small id="addressCountDisplay" class="form-text text-muted text-start d-block mt-1">0 条地址</small>
+                            
+                            <div class="advanced-options-button-container">
+                                <button class="btn btn-outline-secondary btn-sm advanced-options-btn" type="button" data-bs-toggle="collapse" data-bs-target="#advancedAddressOptions" aria-expanded="false" aria-controls="advancedAddressOptions">
+                                    <i class="bi bi-gear-fill"></i> 数据清洗
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="collapse mt-2 mb-4" id="advancedAddressOptions">
+                            <div class="row">
+                                <!-- 地址自动处理卡片 -->
+                                <div class="col-md-6 mb-3">
+                                    <div class="card h-100">
+                                        <div class="card-header">
+                                            <h6 class="mb-0"><i class="bi bi-magic"></i> 地址自动处理</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            
+                                            <div class="mb-3">
+                                                <label for="splitDelimiters" class="form-label visually-hidden">分隔符</label>
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">分隔符</span>
+                                                    <input type="text" id="splitDelimiters" class="form-control" value=",、;，" placeholder="输入分隔符，多个用逗号分隔">
+                                                    <button class="btn btn-outline-success btn-sm" type="button" id="autoSplitBtn">
+                                                        <i class="bi bi-scissors"></i> 自动分行
+                                                    </button>
+                                                </div>
+                                                <small class="text-muted">按标点符号分行</small>
+                                            </div>
+
+                                            <div class="mb-3">
+                                                <label for="prependRegionInput" class="form-label visually-hidden">统一省市前缀</label>
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text">统一前缀</span>
+                                                    <input type="text" id="prependRegionInput" class="form-control" placeholder="例如：湖北省武汉市">
+                                                    <button class="btn btn-outline-primary" type="button" id="prependRegionBtn"><i class="bi bi-plus-square"></i> 前置到每条地址</button>
+                                                </div>
+                                                <small class="text-muted">将上方前缀添加到每一行地址的最前面</small>
+                                            </div>
+
+                                            <div class="mb-3">
+                                                <button class="btn btn-outline-primary btn-sm" id="autoCompleteBtn">自动补全行政区划</button>
+                                                <div id="autoCompleteStatus" class="mt-2" style="display: none;">
+                                                    <div class="progress" style="height: 10px;">
+                                                        <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                                                    </div>
+                                                    <small class="text-muted">正在处理：<span id="processingAddress"></span></small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- 地名类型卡片 -->
+                                <div class="col-md-6 mb-3">
+                                    <div class="card h-100">
+                                        <div class="card-header">
+                                            <h6 class="mb-0"><i class="bi bi-tags"></i> 地名类型后缀</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <label for="locationType" class="form-label visually-hidden">地名类型后缀：</label>
+                                            <small class="form-text text-muted d-block mb-2">系统将自动识别并暂存地址末尾的区域后缀（如"历史文化街区"）。地理编码时，这些后缀会被<strong>自动移除</strong>以提高核心地址的识别精度。此功能默认开启，清空所有标签即可禁用。</small>
+                                            <div class="d-flex align-items-center flex-wrap gap-2">
+                                                <input type="text" id="locationType" class="form-control form-control-sm" style="max-width:200px;" placeholder="输入并回车添加后缀">
+                                            </div>
+                                            <div id="locationTypeTagsWrapper" class="mt-2" style="display: none;">
+                                                <div id="locationTypeTags" class="d-flex flex-wrap gap-1"></div>
+                                                <button class="btn btn-outline-danger btn-sm ms-2" type="button" id="clearLocationType" title="清空所有后缀标签"><i class="bi bi-x-lg"></i></button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row justify-content-center mt-3">
+                    <div class="col-lg-8 col-md-10 d-flex justify-content-center">
+                        <div class="main-action-buttons">
+                            <button type="button" class="btn btn-outline-secondary me-2 action-btn-normal" id="normalGeocodeBtn"><i class="bi bi-geo-alt"></i> 多源编码</button>
+                            <button type="button" class="btn btn-primary btn-lg me-2 action-btn-smart" id="smartGeocodeBtn"><i class="bi bi-stars"></i> 智能编码</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 批量处理结果总览 -->
+        <div class="bottom-section" id="cascadeResultsContainer" style="display: none;">
+            <div class="container-fluid">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="card mt-4">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <h5><i class="bi bi-geo-alt-fill me-2"></i>批量处理结果总览</h5>
+                                <div class="d-flex align-items-center">
+                                    <div class="me-3">
+                                        <small class="text-muted">任务名称：</small>
+                                        <span id="taskNameDisplay" class="fw-bold text-primary cursor-pointer" 
+                                              style="cursor: pointer; text-decoration: underline dotted;" 
+                                              title="点击编辑任务名称">未命名任务</span>
+                                        <span id="location-name-display" class="d-none"></span>
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" id="showAllOnOverviewMapBtn">
+                                        <i class="bi bi-fullscreen"></i> 显示全部
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body position-relative">
+                                <!-- 加载遮罩 -->
+                                <div id="batchResultsLoadingOverlay" class="loading-overlay d-none">
+                                    <div class="loading-content">
+                                        <div class="spinner-border text-light" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <div class="mt-3 text-light">
+                                            <div id="loadingText">正在进行地理编码...</div>
+                                            <small id="loadingSubText">智能分析中，请稍候</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div id="map" style="height: 400px; width: 100%; border: 1px solid #ddd; border-radius: 25px;">
+                                </div>
+
+                                <div class="table-responsive fixed-height-table-container mt-3">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th class="text-center">序号</th>
+                                                <th>名称 (原始地址)</th>
+                                                <th>省</th>
+                                                <th>市</th>
+                                                <th>区县</th>
+                                                <th>匹配地址</th>
+                                                <th>经纬度 (WGS84)</th>
+                                                <th class="text-center">可信度</th>
+                                                <th class="text-center">来源</th>
+                                                <th class="text-center">操作</th>
+                                                <th>备注</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="cascadeResultsBody">
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2" id="cascadePaginationBar">
+                                    <div class="input-group input-group-sm" style="max-width: 220px;">
+                                        <span class="input-group-text">每页</span>
+                                        <select class="form-select" id="resultsPageSize">
+                                            <option value="10">10</option>
+                                            <option value="15" selected>15</option>
+                                            <option value="20">20</option>
+                                            <option value="50">50</option>
+                                            <option value="100">100</option>
+                                        </select>
+                                        <span class="input-group-text">条</span>
+                                    </div>
+                                    <nav aria-label="Results pagination" class="ms-auto">
+                                        <ul class="pagination pagination-sm mb-0" id="resultsPagination"></ul>
+                                    </nav>
+                                </div>
+                                <div class="text-center mt-3">
+                                    <button type="button" class="btn btn-info" id="viewDetailsSequentiallyBtn"><i class="bi bi-card-list"></i> 逐条查看与校准</button>
+                                </div>
+
+                                <div class="text-center mt-3">
+                                    <div class="btn-group ms-2">
+                                        <button type="button" class="btn btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                            <i class="bi bi-download"></i> 导出文件
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" id="exportExcelBtn"><i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)</a></li>
+                                            <li><a class="dropdown-item" href="#" id="exportKmlBtn"><i class="bi bi-geo-alt"></i> KML (.kml)</a></li>
+                                            <li><a class="dropdown-item" href="#" id="exportShpBtn"><i class="bi bi-map"></i> Shapefile (.shp)</a></li>
+                                        </ul>
+                                    </div>
+
+                                    <button id="smartCalibrationBtn" class="btn btn-primary ms-2" type="button">
+                                        <i class="bi bi-robot"></i> 智能校准
+                                    </button>
+
+                                    <button id="saveResultsBtn" class="btn btn-info ms-2" type="button">
+                                        <i class="bi bi-save"></i> 保存结果到账户
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 逐条校准区 -->
+        <div id="detailedReviewSection" class="mt-4" style="display: none;">
+            <div class="container-fluid">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="map-container">
+                            <div id="itemCalibrationMap"></div>
+                            <button class="btn btn-warning btn-sm" id="manualMarkBtnOnMap">
+                                <i class="bi bi-pin-map"></i> 手动标注
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <div class="calibration-controls-panel">
+                            <div id="batchCalibrationResults" class="mt-3" style="display: none;">
+                                <div class="original-address-info mb-3">
+                                    <div class="d-flex align-items-center">
+                                        <i class="bi bi-geo-alt-fill text-primary me-2"></i>
+                                        <div>
+                                            <small class="text-muted d-block">原始地址</small>
+                                            <strong id="originalAddressDisplay" class="text-break"></strong>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex align-items-center my-3">
+                                    <button type="button" class="btn btn-outline-primary btn-sm prev-result-btn">
+                                        <i class="bi bi-chevron-left"></i> 上一个
+                                    </button>
+
+                                    <div id="selectedResultDetailCard" class="card flex-grow-1 mx-2" style="display: none;">
+                                        <div class="card-header bg-success text-white">
+                                            <i class="bi bi-check-circle-fill me-1"></i> 当前选定结果 <span id="currentItemIndicatorInCard" class="text-white-50 small ms-2"><!-- X / Y --></span>
+                                        </div>
+                                        <div class="card-body">
+                                            <p class="card-text mb-1"><strong>名称:</strong> <span id="selectedPoiName">-</span></p>
+                                            <p class="card-text mb-1"><strong>地址:</strong> <span id="selectedFormattedAddress">-</span></p>
+                                            <p class="card-text mb-1"><strong>来源:</strong> <span id="selectedSourceApi">-</span></p>
+                                            <p class="card-text mb-1"><strong>可信度:</strong> <span id="selectedConfidence">-</span></p>
+                                            <p class="card-text mb-1"><strong>WGS84:</strong> <span id="selectedWgs84">-</span></p>
+                                            <p class="card-text mb-1"><strong>GCJ02:</strong> <span id="selectedGcj02">-</span></p>
+                                            <p class="card-text mb-2"><strong>理由:</strong> <span id="selectedLlmReason">-</span></p>
+                                            <div class="btn-group btn-group-sm w-100">
+                                                <button type="button" class="btn btn-outline-primary" id="locateSelectedOnMapBtn"><i class="bi bi-map"></i> 定位</button>
+                                                <button type="button" class="btn btn-outline-success" id="confirmCurrentBtn" title="确认/取消确认此结果"><i class="bi bi-check-circle"></i> 确认</button>
+                                                <button type="button" class="btn btn-outline-danger" id="clearSelectedInCardBtn"><i class="bi bi-x-lg"></i> 清除</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <button type="button" class="btn btn-outline-primary btn-sm next-result-btn ms-2">
+                                        下一个 <i class="bi bi-chevron-right"></i>
+                                    </button>
+                                </div>
+                                <div id="noSelectedResultMsg" class="alert alert-warning text-center" style="display: none;">尚未为该地址选定最终结果。</div>
+
+                                <div class="d-grid gap-2 my-2">
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#advancedApiResultsContainer" aria-expanded="false" aria-controls="advancedApiResultsContainer" id="toggleAdvancedResultsBtn">
+                                        显示/隐藏各平台结果与操作 <i class="bi bi-chevron-down"></i>
+                                    </button>
+                                </div>
+
+                                <div class="row collapse" id="advancedApiResultsContainer">
+                                    <div class="col-md-4">
+                                        <div class="api-result-card" data-api="tianditu">
+                                            <h6 class="api-title">天地图</h6>
+                                            <div class="result-content"></div>
+                                            <button class="btn btn-outline-success select-api-btn" data-api="tianditu">
+                                                <i class="bi bi-check-lg"></i> 选定
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="api-result-card" data-api="amap">
+                                            <h6 class="api-title">高德地图</h6>
+                                            <div class="result-content"></div>
+                                            <button class="btn btn-outline-success select-api-btn" data-api="amap">
+                                                <i class="bi bi-check-lg"></i> 选定
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="api-result-card" data-api="baidu">
+                                            <h6 class="api-title">百度地图</h6>
+                                            <div class="result-content"></div>
+                                            <button class="btn btn-outline-success select-api-btn" data-api="baidu">
+                                                <i class="bi bi-check-lg"></i> 选定
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-3 text-center">
+                                    <button class="btn btn-info" id="showAddressSearchToolsBtn">
+                                        <i class="bi bi-tools"></i> 地址查找工具
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 地址查找工具区（改为三卡布局） -->
+        <div id="addressSearchToolsContainer" class="mt-4" style="display: none;">
+            <div class="container-fluid">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-tools me-2"></i>地址查找工具</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <!-- 左侧：POI 搜索（约60%） -->
+                            <div class="col-lg-8">
+                                <div class="poi-search-panel">
+                                    <h6 class="mb-2"><strong>POI 地图搜索</strong></h6>
+                                    <div class="input-group">
+                                        <input type="text" id="mapSearchInput" class="form-control" placeholder="输入地点名称...">
+                                        <select id="map-search-source" class="form-select" style="max-width: 100px; border-top-left-radius: 0; border-bottom-left-radius: 0;">
+                                            <option value="tianditu" selected>天地图</option>
+                                            <option value="amap">高德</option>
+                                            <option value="baidu">百度</option>
+                                        </select>
+                                        <button class="btn btn-primary" type="button" id="mapSearchBtn">
+                                            <i class="bi bi-search"></i> 搜索
+                                        </button>
+                                    </div>
+                                    <div class="d-flex align-items-center mt-2">
+                                        <button class="btn btn-outline-primary btn-sm" type="button" id="intelligentSelectBtn">
+                                            <i class="bi bi-magic"></i> 智能选择
+                                        </button>
+                                        <div class="spinner-border spinner-border-sm text-primary ms-2" role="status" id="mapSearchSpinner" style="display: none;">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </div>
+                                    <div class="search-results-container mt-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <h6 class="mb-0" id="poi-results-title">地图搜索结果</h6>
+                                            <div class="btn-group">
+                                                <button type="button" class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" title="点选操作">
+                                                    <i class="bi bi-three-dots-vertical"></i>
+                                                </button>
+                                                <ul class="dropdown-menu dropdown-menu-end">
+                                                    <li><button class="dropdown-item" type="button" id="autoSelectPointBtn"><i class="bi bi-bullseye"></i> 自动选点</button></li>
+                                                    <li><button class="dropdown-item" type="button" id="smartSelectPointBtn"><i class="bi bi-cpu"></i> 智能选点</button></li>
+                                                    <li><button class="dropdown-item" type="button" id="hybridSelectPointBtn"><i class="bi bi-diagram-3"></i> 混合选点</button></li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                        <div class="table-responsive">
+                                            <table class="table table-hover" id="mapSearchResultsTable">
+                                                <thead>
+                                                    <tr>
+                                                        <th>#</th>
+                                                        <th>名称</th>
+                                                        <th>地址</th>
+                                                        <th>所属区域</th>
+                                                        <th>置信度</th>
+                                                        <th>操作</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="map-search-results-body"></tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- 右侧：信息获取与关键词建议（约40%） -->
+                            <div class="col-lg-4">
+                                <!-- 当前分析地址 -->
+                                <div class="card mb-3">
+                                    <div class="card-body p-3">
+                                        <label for="currentAnalysisAddressInput" class="form-label mb-1 text-muted small">当前分析地址</label>
+                                        <input type="text" id="currentAnalysisAddressInput" class="form-control form-control-sm" placeholder="请输入要分析的地址">
+                                    </div>
+                                </div>
+                                <!-- 网络信息获取 -->
+                                <div class="card mb-3">
+                                    <div class="card-header py-2">
+                                        <h6 class="mb-0"><i class="bi bi-search"></i> 网络信息搜集与摘录</h6>
+                                    </div>
+                                    <div class="card-body p-3">
+                                        <button type="button" class="btn btn-primary btn-sm" id="step1SearchBtn">
+                                            <i class="bi bi-cloud-download"></i> 获取网络信息
+                                        </button>
+                                        <div id="step1Spinner" class="text-center mt-2" style="display: none;">
+                                            <div class="spinner-border text-primary" role="status" style="width: 1.5rem; height: 1.5rem;"></div>
+                                        </div>
+                                        <div id="step1Results" class="mt-2" style="display: none;">
+                                            <div id="step1ExcerptsList" class="list-group list-group-flush"></div>
+                                        </div>
+                                        <div id="step2Results" class="mt-2" style="display: none;">
+                                            <!-- Placeholder for Step 2 results to prevent JS errors -->
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 关键词建议 -->
+                                <div class="card">
+                                    <div class="card-header py-2">
+                                        <h6 class="mb-0"><i class="bi bi-lightbulb"></i> 关键词建议</h6>
+                                    </div>
+                                    <div class="card-body p-3">
+                                        <button type="button" class="btn btn-warning btn-sm" id="step3SuggestBtn">
+                                            <i class="bi bi-lightbulb-fill"></i> 生成关键词建议
+                                        </button>
+                                        <div id="step3Prerequisites" class="mt-2"></div>
+                                        <div id="step3Spinner" class="text-center mt-2" style="display: none;">
+                                            <div class="spinner-border text-warning" role="status" style="width: 1.5rem; height: 1.5rem;"></div>
+                                        </div>
+                                        <div id="step3Results" class="mt-2" style="display: none;">
+                                            <div id="step3KeywordsList"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="modal fade" id="locationNameModal" tabindex="-1" aria-labelledby="locationNameModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="locationNameModalLabel">请输入地址名录名称</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="locationName" class="form-label">名录名称</label>
+                        <input type="text" class="form-control" id="locationName" placeholder="请输入地址名录名称">
+                        <div class="form-text">请使用中文填写地址名录的名称，正确填写将有助于AI理解，提高解析正确率，且将作为空间数据下载文件名称。例如：湖北省第一批省级历史文化街区</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="confirmLocationName">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="loginRegisterModal" tabindex="-1" aria-labelledby="loginRegisterModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 400px;">
+            <div class="modal-content" style="border-radius: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+                <div class="modal-header border-0 pb-0">
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4 pt-2 pb-4">
+                    <div class="text-center mb-4">
+                        <img src="{{ url_for('static', filename='logo.png') }}" alt="GeoCo Logo" style="max-height: 50px; margin-bottom:15px;">
+                        <h5 class="modal-title" id="loginRegisterModalLabel" style="font-weight: 600; color: #333;">欢迎来到陆梧GeoCo</h5>
+                        <p class="text-muted small" id="loginRegisterModalSubtitle">邮箱登录/注册</p>
+                    </div>
+
+                    <ul class="nav nav-tabs nav-fill mb-3" id="loginRegisterTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="account-login-tab" data-bs-toggle="tab" data-bs-target="#account-login-pane" type="button" role="tab" aria-controls="account-login-pane" aria-selected="true">账号登录</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="email-login-tab" data-bs-toggle="tab" data-bs-target="#email-login-pane" type="button" role="tab" aria-controls="email-login-pane" aria-selected="false">邮箱登录</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content" id="loginRegisterTabContent">
+                        <div class="tab-pane fade" id="email-login-pane" role="tabpanel" aria-labelledby="email-login-tab">
+                            <form id="loginModalForm">
+                                <div class="mb-3">
+                                    <input type="email" class="form-control form-control-lg" id="modalEmail" placeholder="请输入邮箱" required style="height: 48px; border-radius: 6px;">
+                                </div>
+                                <div class="input-group mb-3">
+                                    <input type="text" class="form-control form-control-lg" id="modalVerificationCode" placeholder="请输入验证码" required style="height: 48px; border-radius: 6px 0 0 6px;">
+                                    <button class="btn btn-outline-secondary" type="button" id="modalSendVerificationCodeBtn" style="height: 48px; border-radius: 0 6px 6px 0;">获取验证码</button>
+                                </div>
+                                <div class="form-check text-start mb-3">
+                                    <input class="form-check-input" type="checkbox" value="" id="modalAgreeTerms" checked>
+                                    <label class="form-check-label small text-muted" for="modalAgreeTerms">
+                                        我已阅读并同意 <a href="{{ url_for('main.user_agreement') }}" target="_blank" class="text-primary">用户服务协议</a> 和 <a href="{{ url_for('main.privacy_policy') }}" target="_blank" class="text-primary">隐私政策</a>
+                                    </label>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100 btn-lg mb-3" id="emailLoginRegisterBtn" style="height: 48px; border-radius: 6px; font-weight: 500;">登录 / 注册</button>
+                            </form>
+                        </div>
+
+                        <div class="tab-pane fade show active" id="account-login-pane" role="tabpanel" aria-labelledby="account-login-tab">
+                            <form id="accountLoginForm">
+                                <div class="mb-3">
+                                    <input type="text" class="form-control form-control-lg" id="modalUsernameOrEmail" placeholder="邮箱 / 用户名" required style="height: 48px; border-radius: 6px;">
+                                </div>
+                                <div class="mb-3">
+                                    <input type="password" class="form-control form-control-lg" id="modalPassword" placeholder="请输入密码" required style="height: 48px; border-radius: 6px;">
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <a href="#" class="small text-primary" id="forgotPasswordLink">忘记密码?</a>
+                                    <a href="#" class="small text-primary" id="switchToRegisterSetPassword">注册账号/设置密码</a>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100 btn-lg mb-3" style="height: 48px; border-radius: 6px; font-weight: 500;">登录</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="d-none" id="register-set-password-pane">
+                         <div class="text-center mb-2">
+                            <a href="#" class="small text-primary" id="backToLoginLink">&lt; 返回登录</a>
+                        </div>
+                        <form id="registerSetPasswordForm">
+                            <div class="mb-3">
+                                <input type="email" class="form-control form-control-lg" id="registerEmail" placeholder="请输入邮箱" required style="height: 48px; border-radius: 6px;">
+                                <div id="registerEmailError" class="invalid-feedback mt-1"></div>
+                            </div>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control form-control-lg" id="registerVerificationCode" placeholder="请输入验证码" required style="height: 48px; border-radius: 6px 0 0 6px;">
+                                <button class="btn btn-outline-secondary" type="button" id="registerSendVerificationCodeBtn" style="height: 48px; border-radius: 0 6px 6px 0;">获取验证码</button>
+                            </div>
+                            <div class="mb-3">
+                                <input type="password" class="form-control form-control-lg" id="registerPassword" placeholder="设置密码 (至少6位)" required style="height: 48px; border-radius: 6px;">
+                            </div>
+                            <div class="mb-3">
+                                <input type="password" class="form-control form-control-lg" id="registerConfirmPassword" placeholder="请再次输入密码" required style="height: 48px; border-radius: 6px;">
+                            </div>
+                            <div class="form-check text-start mb-3">
+                                <input class="form-check-input" type="checkbox" value="" id="registerAgreeTerms" checked>
+                                <label class="form-check-label small text-muted" for="registerAgreeTerms">
+                                    我已阅读并同意 <a href="{{ url_for('main.user_agreement') }}" target="_blank" class="text-primary">用户服务协议</a> 和 <a href="{{ url_for('main.privacy_policy') }}" target="_blank" class="text-primary">隐私政策</a>
+                                </label>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100 btn-lg mb-3" style="height: 48px; border-radius: 6px; font-weight: 500;">提交</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 9999">
+        <div id="cleanupToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <img src="{{ url_for('static', filename='logo.png') }}" class="rounded me-2" alt="..." style="width: 20px; height: 20px;">
+                <strong class="me-auto">陆梧GeoCo 通知</strong>
+                <small>刚刚</small>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                <!-- Toast message will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container for dynamic notifications -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 10000">
+        <!-- Dynamic toasts will be inserted here -->
+    </div>
+
+    <div class="modal fade" id="rechargeModal" tabindex="-1" aria-labelledby="rechargeModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title" id="rechargeModalLabel" style="font-weight: 600;">积分充值</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4 pt-2 pb-4">
+                    <h6 class="mb-3">1. 请选择充值套餐</h6>
+                    <div class="row" id="rechargePackageList">
+                        {% if packages %}
+                            {% for key, package in packages.items() %}
+                            <div class="col-md-4 mb-3">
+                                <div class="recharge-package-card card-clickable" data-package-id="{{ key }}">
+                                    <div style="font-size: 1.8rem; font-weight: bold; color: #0d6efd;">{{ package.points }} <small>积分</small></div>
+                                    <div style="font-size: 1.5rem; color: #dc3545; font-weight: 500;">¥{{ "%.2f"|format(package.price) }}</div>
+                                    <p class="text-muted small mt-1 mb-0">{{ package.name }}</p>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-danger">无法加载充值套餐，请联系管理员。</p>
+                        {% endif %}
+                    </div>
+
+                    <hr class="my-4">
+
+                    <div class="row">
+                        <div class="col-md-7">
+                            <h6 class="mb-3">2. 请选择支付方式</h6>
+                            <div class="d-flex gap-3 mb-3" id="paymentMethodList">
+                                <button type="button" class="btn btn-outline-primary payment-method-btn flex-fill" data-method="alipay" disabled>
+                                    <img src="{{ url_for('static', filename='images/alipay_logo.svg') }}" alt="Alipay" style="height: 24px; margin-right: 8px;">支付宝
+                                </button>
+                                <button type="button" class="btn btn-outline-success payment-method-btn flex-fill" data-method="wechat" disabled>
+                                    <img src="{{ url_for('static', filename='images/wechat_logo.svg') }}" alt="WeChat Pay" style="height: 24px; margin-right: 8px;">微信支付
+                                </button>
+                            </div>
+                            <div class="form-check text-start">
+                                <input class="form-check-input" type="checkbox" id="agreeRechargeTerms" checked>
+                                <label class="form-check-label small text-muted" for="agreeRechargeTerms">
+                                    我已阅读并同意 <a href="{{ url_for('main.user_agreement') }}" target="_blank" class="text-primary">陆梧Geo付费服务协议</a>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-5">
+                            <h6 class="text-center mb-2">3. 扫码支付</h6>
+                            <div class="qr-code-wrapper d-flex align-items-center justify-content-center" style="position: relative; min-height: 240px; background-color: #f8f9fa; border-radius: 15px;">
+                                <div id="qrCodePlaceholder" class="text-center p-3">
+                                    <span class="text-muted">请先选择套餐与支付方式</span>
+                                </div>
+                                <div id="qrCodeArea" class="text-center p-3" style="display: none;">
+                                    <img alt="支付二维码" id="paymentQrCode" style="width:160px; height:160px; border-radius: 8px; margin-bottom: 10px;">
+                                    <p class="mb-1 small">需支付: <strong id="amountToPay" class="text-danger"></strong> 元</p>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" id="orderNumberDisplay" class="form-control" placeholder="订单号" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" id="copyOrderNumberBtn" title="复制订单号"><i class="bi bi-clipboard"></i></button>
+                                    </div>
+                                    <p class="small text-primary mt-1" style="font-size: 0.75rem;">支付时请务必备注订单号</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-0">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="confirmPaymentBtn" disabled>我已完成支付</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="freePointsModal" tabindex="-1" aria-labelledby="freePointsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title" id="freePointsModalLabel" style="font-weight: 600;">免费赚积分</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4 pt-2 pb-4">
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100 text-center" style="border-radius: 15px;">
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <i class="bi bi-key-fill text-primary" style="font-size: 2rem;"></i>
+                                    </div>
+                                    <h6 class="card-title">配置 API Key</h6>
+                                    <p class="card-text small text-muted">配置您的地图或AI API Key，即可获得积分奖励</p>
+                                    <div class="mt-3">
+                                        <span class="badge bg-success">+100 积分</span>
+                                        <span class="badge bg-info ms-1">+200 积分</span>
+                                    </div>
+                                    <button type="button" class="btn btn-primary btn-sm mt-3" id="openApiKeysTabBtn">
+                                        <i class="bi bi-arrow-right"></i> 立即配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100 text-center" style="border-radius: 15px;">
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <i class="bi bi-share text-success" style="font-size: 2rem;"></i>
+                                    </div>
+                                    <h6 class="card-title">分享推荐</h6>
+                                    <p class="card-text small text-muted">邀请朋友使用陆梧GeoCo，双方都可获得积分奖励</p>
+                                    <div class="mt-2">
+                                        <span class="badge bg-warning text-dark">+50 积分/人（双方）</span>
+                                    </div>
+                                    <div class="mt-3 text-start small">
+                                        <div class="mb-2"><strong>我的推荐码：</strong><span id="referralCodeText" class="text-primary">--</span>
+                                            <button type="button" class="btn btn-outline-secondary btn-sm ms-2" id="copyReferralCodeBtn"><i class="bi bi-clipboard"></i> 复制</button>
+                                        </div>
+                                        <div class="input-group input-group-sm">
+                                            <span class="input-group-text">邀请链接</span>
+                                            <input type="text" class="form-control" id="referralLinkInput" readonly>
+                                            <button class="btn btn-outline-success" type="button" id="copyReferralLinkBtn"><i class="bi bi-clipboard-check"></i> 复制链接</button>
+                                        </div>
+                                        <div class="text-muted mt-2" id="referralStatsText">已成功邀请 0 人</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-4 mb-3">
+                            <div class="card h-100 text-center" style="border-radius: 15px;">
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <i class="bi bi-chat-dots text-info" style="font-size: 2rem;"></i>
+                                    </div>
+                                    <h6 class="card-title">意见反馈</h6>
+                                    <p class="card-text small text-muted">提交有价值的意见反馈，获得积分奖励</p>
+                                    <div class="mt-3">
+                                        <span class="badge bg-primary">+10-50 积分</span>
+                                    </div>
+                                    <button type="button" class="btn btn-info btn-sm mt-3" id="feedbackFromFreePointsBtn">
+                                        <i class="bi bi-chat"></i> 提交反馈
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row mt-2">
+                        <div class="col-md-12">
+                            <div class="card" style="border-radius: 15px;">
+                                <div class="card-body">
+                                    <div class="d-flex align-items-center mb-2">
+                                        <i class="bi bi-megaphone text-danger me-2" style="font-size: 1.4rem;"></i>
+                                        <h6 class="mb-0">社交媒体传播</h6>
+                                        <span class="badge bg-warning text-dark ms-2">加分按效果评估</span>
+                                    </div>
+                                    <p class="small text-muted mb-2">在微信公众号、朋友圈、专业群、小红书等平台发布推广内容，并上传截图（含粉丝量、浏览/收藏量等）通过意见反馈提交，作者将根据传播效果给予额外积分。</p>
+                                    <div class="mb-2">
+                                        <textarea class="form-control" id="socialShareCopyText" rows="3" placeholder="点击“生成文案”自动生成可复制的宣传文案"></textarea>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button type="button" class="btn btn-outline-primary btn-sm" id="generateSocialCopyBtn"><i class="bi bi-stars"></i> 生成文案</button>
+                                        <button type="button" class="btn btn-outline-success btn-sm" id="copySocialCopyBtn"><i class="bi bi-clipboard-check"></i> 复制文案</button>
+                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="openFeedbackForSocialBtn"><i class="bi bi-chat-dots"></i> 提交传播截图</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center mt-4">
+                        <div class="alert alert-info" role="alert">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <strong>温馨提示：</strong>配置 API Key 是最快速获得积分的方式，同时也能提升您的地理编码体验！
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="forgotPasswordModal" tabindex="-1" aria-labelledby="forgotPasswordModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 400px;">
+            <div class="modal-content" style="border-radius: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title" id="forgotPasswordModalLabel" style="font-weight: 600; color: #333;">重置密码</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body px-4 pt-2 pb-4">
+                    <form id="forgotPasswordForm">
+                        <div class="mb-3">
+                            <label for="forgotEmail" class="form-label">注册邮箱</label>
+                            <input type="email" class="form-control form-control-lg" id="forgotEmail" placeholder="请输入您注册时使用的邮箱" required style="height: 48px; border-radius: 6px;">
+                        </div>
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control form-control-lg" id="forgotVerificationCode" placeholder="请输入验证码" required style="height: 48px; border-radius: 6px 0 0 6px;">
+                            <button class="btn btn-outline-secondary" type="button" id="sendForgotVerificationCodeBtn" style="height: 48px; border-radius: 0 6px 6px 0;">获取验证码</button>
+                        </div>
+                        <div class="mb-3">
+                            <label for="newPassword" class="form-label">新密码</label>
+                            <input type="password" class="form-control form-control-lg" id="newPassword" placeholder="设置新密码 (至少6位)" required style="height: 48px; border-radius: 6px;">
+                        </div>
+                        <div class="mb-3">
+                            <label for="confirmNewPassword" class="form-label">确认新密码</label>
+                            <input type="password" class="form-control form-control-lg" id="confirmNewPassword" placeholder="请再次输入新密码" required style="height: 48px; border-radius: 6px;">
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100 btn-lg mb-3" id="resetPasswordBtn" style="height: 48px; border-radius: 6px; font-weight: 500;">重置密码</button>
+                        <div class="text-center">
+                            <a href="#" class="small text-primary" id="backToLoginFromForgotLink">&lt; 返回登录</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="settingsModalLabel">设置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <ul class="nav nav-pills flex-column" id="settingsTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="profile-tab" data-bs-toggle="pill" data-bs-target="#profile-pane" type="button" role="tab" aria-controls="profile-pane" aria-selected="true">
+                                        <i class="bi bi-person-circle me-2"></i>个人资料
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="change-password-tab" data-bs-toggle="pill" data-bs-target="#change-password-pane" type="button" role="tab" aria-controls="change-password-pane" aria-selected="false">
+                                        <i class="bi bi-shield-lock me-2"></i>修改密码
+                                    </button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="apikeys-tab" data-bs-toggle="pill" data-bs-target="#apikeys-pane" type="button" role="tab" aria-controls="apikeys-pane" aria-selected="false">
+                                        <i class="bi bi-key-fill me-2"></i>Key配置
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="col-md-9">
+                            <div class="tab-content" id="settingsTabContent">
+                                <div class="tab-pane fade show active" id="profile-pane" role="tabpanel" aria-labelledby="profile-tab">
+                                    <h5>个人资料</h5>
+                                    <div class="mb-3">
+                                        <label for="settingsUsername" class="form-label">名称</label>
+                                        <input type="text" class="form-control" id="settingsUsername" placeholder="请输入您的用户名">
+                                        <small class="text-muted float-end" id="usernameCharCount">0/20</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="settingsEmail" class="form-label">邮箱</label>
+                                        <input type="email" class="form-control" id="settingsEmail" readonly disabled>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="settingsPhoneNumber" class="form-label">手机号</label>
+                                        <input type="tel" class="form-control" id="settingsPhoneNumber" readonly disabled>
+                                    </div>
+                                    <button type="button" class="btn btn-primary" id="saveSettingsBtn">保存更改</button>
+                                    <hr>
+                                    <button type="button" class="btn btn-outline-danger" id="deleteAccountBtn">注销账户</button>
+                                    <small class="text-muted d-block mt-1">注销账户操作不可逆，请谨慎操作。</small>
+                                </div>
+                                <div class="tab-pane fade" id="change-password-pane" role="tabpanel" aria-labelledby="change-password-tab">
+                                    <h5>修改密码</h5>
+                                    <div class="mb-3">
+                                        <label for="oldPassword" class="form-label">当前密码</label>
+                                        <input type="password" class="form-control" id="oldPassword" placeholder="请输入当前密码">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="newPasswordInSettings" class="form-label">新密码</label>
+                                        <input type="password" class="form-control" id="newPasswordInSettings" placeholder="新密码（至少6位）">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="confirmNewPasswordInSettings" class="form-label">确认新密码</label>
+                                        <input type="password" class="form-control" id="confirmNewPasswordInSettings" placeholder="请再次输入新密码">
+                                    </div>
+                                    <button type="button" class="btn btn-primary" id="changePasswordBtn">保存新密码</button>
+                                    <small class="text-muted d-block mt-2">提示：若您的账号是邮箱验证码登录且未设置过密码，请在登录窗口使用“注册/设置密码”。</small>
+                                </div>
+                                <div class="tab-pane fade" id="apikeys-pane" role="tabpanel" aria-labelledby="apikeys-tab">
+                                    <h5>API Key配置</h5>
+                                    <p class="text-muted small">您可以选择配置自己的地图和AI API Key。您的Key将优先用于您的请求，并可能为您带来额外积分奖励。</p>
+                                    <div class="mb-3">
+                                        <label for="settingsAmapKey" class="form-label d-flex justify-content-between align-items-center">高德地图 API Key <a href="https://lbs.amap.com/api/javascript-api/guide/abc/prepare" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
+                                        <input type="text" class="form-control" id="settingsAmapKey" placeholder="请输入高德地图 API Key" data-service-name="amap">
+                                        <small id="amapKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="settingsBaiduKey" class="form-label d-flex justify-content-between align-items-center">百度地图 API Key <a href="https://lbsyun.baidu.com/index.php?title=jspopularGL" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
+                                        <input type="text" class="form-control" id="settingsBaiduKey" placeholder="请输入百度地图 API Key" data-service-name="baidu">
+                                        <small id="baiduKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="settingsTiandituKey" class="form-label d-flex justify-content-between align-items-center">天地图 API Key <a href="https://www.tianditu.gov.cn/" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
+                                        <input type="text" class="form-control" id="settingsTiandituKey" placeholder="请输入天地图 API Key" data-service-name="tianditu">
+                                        <small id="tiandituKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                    </div>
+                                     <div class="mb-3">
+                                        <label for="settingsAIKey" class="form-label d-flex justify-content-between align-items-center">AI 大模型 API Key <a href="https://open.bigmodel.cn/" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
+                                        <input type="text" class="form-control" id="settingsAIKey" placeholder="请输入AI大模型 API Key（用于智能搜索）" data-service-name="zhipuai">
+                                        <small id="aiKeyHelpText" class="form-text text-muted">成功配置后，您将获得200积分。</small>
+                                    </div>
+                                    <button type="button" class="btn btn-primary" id="saveApiKeysBtn">保存API Keys</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="feedbackModal" tabindex="-1" aria-labelledby="feedbackModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="feedbackModalLabel">联系我们</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="feedbackForm">
+                        <input type="hidden" id="feedbackCategory" value="">
+                        <input type="hidden" id="feedbackMetadata" value="">
+                        <div class="mb-3">
+                            <label for="feedbackDescription" class="form-label">请详细描述您的问题。</label>
+                            <textarea class="form-control" id="feedbackDescription" rows="5" placeholder="请详细描述您的问题" maxlength="200" required></textarea>
+                            <div class="text-end text-muted small mt-1"><span id="feedbackCharCount">0</span>/200</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="feedbackImagesInput" class="form-label">上传图片 (支持JPG/JPEG/PNG/WEBP格式, 10M以内, 最多上传三张)</label>
+                            <div id="feedbackImageUploadArea" class="border rounded p-3 text-center" style="cursor: pointer; display: flex; align-items: center; justify-content: center; min-height: 100px; background-color: #f8f9fa; border-radius: 25px !important;">
+                                <i class="bi bi-plus-lg fs-1 text-muted"></i>
+                            </div>
+                            <input type="file" id="feedbackImagesInput" multiple accept="image/jpeg,image/png,image/webp" class="d-none">
+                            <div id="feedbackImagePreviewContainer" class="mt-2 d-flex flex-wrap gap-2">
+                                <!-- Image previews will be shown here -->
+                            </div>
+                        </div>
+                        <div class="text-muted small mb-3">
+                            也可以通过邮件联系我们: <a href="mailto:qqzj-cool@163.com">qqzj-cool@163.com</a>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="submitFeedbackBtn">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 使用教程模态框 -->
+    <div class="modal fade" id="helpModal" tabindex="-1" aria-labelledby="helpModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="helpModalLabel"><i class="bi bi-mortarboard me-2"></i>陆梧GeoCo 使用教程</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="container-fluid">
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <h6>快速上手</h6>
+                                <ol class="mb-3">
+                                    <li>登录账户（未登录将无法开始编码）。</li>
+                                    <li>将地址粘贴到输入框，每行一个地址。</li>
+                                    <li>点击“多源编码”开始获取候选结果。</li>
+                                    <li>点击“智能编码”可一键完成编码并自动校准。</li>
+                                    <li>在批量结果中确认合适结果，或进入“逐条查看与校准”。</li>
+                                    <li>确认后，点击“导出文件”下载为 Excel/KML/SHP。</li>
+                                </ol>
+                            </div>
+                            <div class="col-12">
+                                <h6>常用功能</h6>
+                                <ul class="mb-3">
+                                    <li>数据清洗：支持自动分行、统一省市前缀、自动补全行政区划。</li>
+                                    <li>地址查找工具：在地图上搜索并选择更精准的地点。</li>
+                                    <li>API Key 配置：在“设置”中填写各地图/AI Key，可提升额度与体验。</li>
+                                    <li>积分与充值：右上角可查看积分，支持充值与活动获取。</li>
+                                </ul>
+                            </div>
+                            <div class="col-12">
+                                <div class="alert alert-info mb-0">
+                                    提示：如遇问题，欢迎通过“意见反馈”联系我们。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导出确认模态框 -->
+    <div class="modal fade" id="exportConfirmModal" tabindex="-1" aria-labelledby="exportConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="exportConfirmModalLabel">
+                        <i class="bi bi-download me-2"></i>确认导出数据
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="exportTaskName" class="form-label">任务名称</label>
+                        <input type="text" class="form-control" id="exportTaskName" 
+                               placeholder="请输入任务名称（至少4个汉字）"
+                               maxlength="50">
+                        <div class="form-text">此名称将用作导出文件的文件名</div>
+                    </div>
+                    <div class="mb-3">
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle me-1"></i>
+                            将导出 <span id="exportRecordCount">0</span> 条有效记录
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="confirmExportBtn">
+                        <i class="bi bi-download me-1"></i>确认导出
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 保存任务模态框 -->
+    <div class="modal fade" id="saveTaskModal" tabindex="-1" aria-labelledby="saveTaskModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="saveTaskModalLabel">保存任务</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="saveTaskForm">
+                        <div class="mb-3">
+                            <label for="taskNameInput" class="form-label">任务名称</label>
+                            <input type="text" class="form-control" id="taskNameInput" placeholder="请输入任务名称">
+                            <div class="invalid-feedback" id="taskNameError"></div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" form="saveTaskForm" class="btn btn-primary">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 我的任务模态框 -->
+    <div class="modal fade" id="myTasksModal" tabindex="-1" aria-labelledby="myTasksModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content" style="border-radius: 25px;">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="myTasksModalLabel">我的任务</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="tasksListContainer">
+                        <!-- 任务列表将在这里显示 -->
+                    </div>
+                    <div id="tasksPaginationContainer" class="d-flex justify-content-center mt-3">
+                        <!-- 分页控件将在这里显示 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.2.4/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        // 将后端配置的天地图/高德Key注入到前端全局（仅用于前端瓦片服务等公开用途）
+        window.__TDT_KEY__ = "{{ TIANDITU_KEY or '' }}";
+        window.__AMAP_KEY__ = "{{ AMAP_KEY or '' }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.1" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+{% extends "admin/base.html" %}
+
+{% block title %}积分管理{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">积分管理</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="ms-3">
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }} py-1 px-2 mb-1">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <form class="row g-2" method="get">
+      <div class="col-sm-8 col-md-6 col-lg-4">
+        <input type="text" name="q" value="{{ q or '' }}" class="form-control" placeholder="按邮箱/用户名搜索">
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-outline-primary" type="submit">搜索</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <form method="post" action="{{ url_for('payment_bp.admin_points_grant') }}">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label">目标类型</label>
+          <select class="form-select" name="target" id="targetSelect">
+            <option value="all">全部用户</option>
+            <option value="emails">指定邮箱（逗号分隔）</option>
+            <option value="selected">选中列表用户</option>
+          </select>
+        </div>
+        <div class="col-md-4" id="emailsRow" style="display:none;">
+          <label class="form-label">邮箱列表</label>
+          <input type="text" class="form-control" name="emails" placeholder="a@ex.com,b@ex.com">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label">积分数量</label>
+          <input type="number" class="form-control" name="amount" min="1" value="100" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">备注（可选）</label>
+          <input type="text" class="form-control" name="reason" placeholder="活动奖励/运营调优等">
+        </div>
+        <input type="hidden" id="selectedIdsInput" name="selected_ids" value="">
+        <div class="col-auto">
+          <button type="submit" class="btn btn-primary">赠送积分</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th scope="col"><input type="checkbox" id="selectAll"></th>
+          <th scope="col">用户ID</th>
+          <th scope="col">邮箱</th>
+          <th scope="col">用户名</th>
+          <th scope="col">积分</th>
+          <th scope="col">最后登录</th>
+          <th scope="col">注册时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><input type="checkbox" class="row-check" value="{{ u.id }}"></td>
+          <td>{{ u.id }}</td>
+          <td>{{ u.email }}</td>
+          <td>{{ u.username or '-' }}</td>
+          <td>{{ u.points or 0 }}</td>
+          <td>{{ u.last_login_at or '-' }}</td>
+          <td>{{ u.created_at or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const selectAll = document.getElementById('selectAll');
+  const checks = Array.from(document.querySelectorAll('.row-check'));
+  const selectedIdsInput = document.getElementById('selectedIdsInput');
+  const targetSelect = document.getElementById('targetSelect');
+  const emailsRow = document.getElementById('emailsRow');
+
+  function syncSelected() {
+    const ids = checks.filter(c => c.checked).map(c => c.value);
+    selectedIdsInput.value = ids.join(',');
+  }
+  function updateTargetUi() {
+    emailsRow.style.display = targetSelect.value === 'emails' ? '' : 'none';
+  }
+  selectAll && selectAll.addEventListener('change', function(){
+    checks.forEach(c => c.checked = selectAll.checked);
+    syncSelected();
+  });
+  checks.forEach(c => c.addEventListener('change', syncSelected));
+  targetSelect && targetSelect.addEventListener('change', updateTargetUi);
+  updateTargetUi();
+});
+</script>
+
+{% endblock %}
+
+

@@ -1,0 +1,45 @@
+                <div class="container">
+                    <a class="navbar-brand" href="{{ url_for('main.index') }}">
+                    </a>
+                    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                        <span class="navbar-toggler-icon"></span>
+                    </button>
+                    <div class="collapse navbar-collapse" id="navbarNav">
+                        <ul class="navbar-nav ms-auto">
+                            {% if session.user_id %}
+                                <!-- 已登录状态 (示例，初始隐藏) -->
+                                <div id="user-signed" class="user-actions d-none d-flex align-items-center">
+                                    <button type="button" class="btn btn-outline-info btn-sm me-2" id="showFreePointsModalBtn"><i class="bi bi-gift"></i> 免费赚积分</button>
+                                    <span class="me-2">积分: <span id="user-points">0</span></span>
+                                    <button type="button" class="btn btn-outline-success btn-sm me-2" id="showRechargeModalBtn">积分充值</button>
+                                    
+                                    {% if session.is_admin %}
+                                    <a href="{{ url_for('payment_bp.admin_orders') }}" class="btn btn-outline-danger btn-sm me-2">后台管理</a>
+                                    {% endif %}
+
+                                    <a href="#" class="me-2 position-relative">
+                                        <i class="bi bi-bell" style="font-size: 1.2rem;"></i>
+                                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" id="notification-badge" style="font-size: 0.6em;">
+                                    </div>
+                            {% endif %}
+                        </ul>
+                    </div>
+                </div>
+
+                <main role="main">
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                        {% if messages %}
+                        <div class="container mt-3">
+                            {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    {% endwith %}
+                    {% block content %}{% endblock %}
+                </main>
+
+                <!-- Toast --> 

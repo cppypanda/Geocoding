@@ -1,0 +1,63 @@
+{% extends "admin/base.html" %}
+
+{% block title %}发送消息{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">发送消息</h1>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="ms-3">
+        {% for category, message in messages %}
+            <div class="alert alert-{{ category }} py-1 px-2 mb-1">{{ message }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form method="post">
+            <div class="mb-3">
+                <label class="form-label">目标</label>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="target" id="targetAll" value="all" checked>
+                    <label class="form-check-label" for="targetAll">全部用户</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="target" id="targetEmail" value="email">
+                    <label class="form-check-label" for="targetEmail">指定邮箱</label>
+                </div>
+            </div>
+
+            <div class="mb-3" id="emailRow" style="display:none;">
+                <label for="email" class="form-label">邮箱</label>
+                <input type="email" name="email" id="email" class="form-control" placeholder="example@domain.com">
+            </div>
+
+            <div class="mb-3">
+                <label for="message" class="form-label">消息内容</label>
+                <textarea name="message" id="message" class="form-control" rows="4" placeholder="输入要发送给用户的通知..." required></textarea>
+            </div>
+
+            <button type="submit" class="btn btn-primary"><i class="bi bi-send"></i> 发送</button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const all = document.getElementById('targetAll');
+  const email = document.getElementById('targetEmail');
+  const emailRow = document.getElementById('emailRow');
+  function update(){ emailRow.style.display = email.checked ? '' : 'none'; }
+  all.addEventListener('change', update);
+  email.addEventListener('change', update);
+  update();
+});
+</script>
+
+{% endblock %}
+
+
