@@ -16,3 +16,4 @@ shapely
 werkzeug
 Levenshtein
 beautifulsoup4
+asgiref
