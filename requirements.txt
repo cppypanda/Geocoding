@@ -15,3 +15,4 @@ simplekml
 shapely
 werkzeug
 Levenshtein
+beautifulsoup4
