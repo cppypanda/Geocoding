@@ -1,5 +1,6 @@
 import os
 import resend
+from resend import Emails
 from flask import current_app
 
 def send_email(to_email, subject, body_html):
@@ -24,15 +25,19 @@ def send_email(to_email, subject, body_html):
     try:
         current_app.logger.debug(f"准备通过 Resend 发送邮件至 {to_email}")
         
-        # 调用 Resend API 发送邮件
-        response = resend.emails.send({
+        # 调用 Resend API 发送邮件（兼容字符串或列表形式的收件人）
+        to_list = to_email if isinstance(to_email, list) else [to_email]
+        response = Emails.send({
             "from": sender_email,
-            "to": [to_email],
+            "to": to_list,
             "subject": subject,
             "html": body_html,
         })
-        
-        current_app.logger.info(f"邮件已成功通过 Resend 发送，收件人: {to_email}, 邮件ID: {response.get('id', 'N/A')}")
+
+        email_id = getattr(response, 'id', None)
+        if email_id is None and isinstance(response, dict):
+            email_id = response.get('id')
+        current_app.logger.info(f"邮件已成功通过 Resend 发送，收件人: {to_list}, 邮件ID: {email_id or 'N/A'}")
         return True
         
     except Exception as e:
