@@ -71,6 +71,17 @@ class Config:
         'invitee': 50
     }
 
+    # SQLAlchemy engine options
+    # - pool_pre_ping: avoid stale connections on platform proxies
+    # - For Render Postgres: force SSL to fix "SSL error: decryption failed or bad record mac"
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+    }
+    _db_uri_lower = (SQLALCHEMY_DATABASE_URI or '').lower()
+    if _db_uri_lower.startswith('postgres://') or _db_uri_lower.startswith('postgresql://'):
+        # psycopg2 respects sslmode in connect args
+        SQLALCHEMY_ENGINE_OPTIONS['connect_args'] = {'sslmode': 'require'}
+
 class DevelopmentConfig(Config):
     """Development configuration."""
     DEBUG = True
