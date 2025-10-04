@@ -128,7 +128,7 @@ def export_data():
                 output,
                 mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 as_attachment=True,
-                attachment_filename=f'{location_name}.xlsx'
+                download_name=f'{location_name}.xlsx'
             )
 
         if export_format == 'kml':
@@ -184,7 +184,7 @@ def export_data():
                 output,
                 mimetype='application/vnd.google-earth.kml+xml',
                 as_attachment=True,
-                attachment_filename=f'{location_name}.kml'
+                download_name=f'{location_name}.kml'
             )
 
         if export_format == 'shp':
@@ -217,7 +217,7 @@ def export_data():
                     zip_buffer,
                     mimetype='application/zip',
                     as_attachment=True,
-                    attachment_filename=f'{location_name}.zip'
+                    download_name=f'{location_name}.zip'
                 )
 
         # 其他不支持的格式

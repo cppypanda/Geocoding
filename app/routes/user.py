@@ -17,6 +17,8 @@ from ..utils.auth import login_required
 
 user_bp = Blueprint('user', __name__, url_prefix='/user')
 
+REFERRAL_POINTS_PER_SIDE = 50
+
 @user_bp.route('/profile', methods=['GET'])
 @login_required
 def get_profile():
@@ -523,6 +525,91 @@ def save_user_api_key():
         current_app.logger.error(f"Error saving API key: {e}")
         return jsonify(success=False, message="保存失败，请稍后重试。"), 500
 
-# Referral logic needs to be refactored similarly. I'll omit it for now to get the app running.
-# The original referral logic was heavily tied to direct sqlite3 calls.
-# It would need to be rewritten using User and Referral models. 
+def _generate_unique_referral_code():
+    alphabet = string.ascii_uppercase + string.digits
+    for _ in range(20):
+        code = ''.join(secrets.choice(alphabet) for _ in range(8))
+        if not User.query.filter_by(referral_code=code).first():
+            return code
+    # Fallback with timestamp entropy
+    return f"R{int(datetime.utcnow().timestamp())}"
+
+@user_bp.route('/referral/info', methods=['GET'])
+@login_required
+def get_referral_info():
+    user = user_service.get_user_by_id(session['user_id'])
+    if not user:
+        return jsonify({'success': False, 'message': '用户未找到'}), 404
+
+    # Ensure referral code exists
+    if not user.referral_code:
+        try:
+            user.referral_code = _generate_unique_referral_code()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"generate referral code error: {e}")
+            return jsonify({'success': False, 'message': '生成推荐码失败'}), 500
+
+    # Assemble share link
+    base = request.host_url  # ends with '/'
+    share_link = f"{base}?ref={user.referral_code}"
+
+    # Stats
+    total_invitees = Referral.query.filter_by(referrer_user_id=user.id).count()
+
+    return jsonify({
+        'success': True,
+        'referral_code': user.referral_code,
+        'share_link': share_link,
+        'stats': {
+            'total_invitees': total_invitees
+        }
+    })
+
+@user_bp.route('/referral/bind', methods=['POST'])
+@login_required
+def bind_referral():
+    data = request.get_json(silent=True) or {}
+    code = (data.get('referral_code') or '').strip()
+    if not code:
+        return jsonify({'success': False, 'message': '推荐码不能为空'}), 400
+
+    invitee = user_service.get_user_by_id(session['user_id'])
+    if not invitee:
+        return jsonify({'success': False, 'message': '用户未找到'}), 404
+
+    referrer = User.query.filter_by(referral_code=code).first()
+    if not referrer:
+        return jsonify({'success': False, 'message': '无效的推荐码'}), 404
+
+    if referrer.id == invitee.id:
+        return jsonify({'success': False, 'message': '不能使用自己的推荐码'}), 400
+
+    # Only bind once per invitee
+    existing = Referral.query.filter_by(invitee_user_id=invitee.id).first()
+    if existing or invitee.referrer_id:
+        return jsonify({'success': False, 'message': '已绑定过推荐人'}), 409
+
+    try:
+        invitee.referrer_id = referrer.id
+        db.session.add(Referral(referrer_user_id=referrer.id, invitee_user_id=invitee.id))
+        # Award points for both sides
+        try:
+            user_service.add_points(referrer.id, REFERRAL_POINTS_PER_SIDE)
+            user_service.add_points(invitee.id, REFERRAL_POINTS_PER_SIDE)
+        except Exception as e:
+            current_app.logger.warning(f"add_points failed during referral bind: {e}")
+        db.session.commit()
+        return jsonify({'success': True, 'message': '推荐绑定成功'})
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"bind_referral error: {e}")
+        return jsonify({'success': False, 'message': '绑定失败'}), 500
+
+@user_bp.route('/referral/stats', methods=['GET'])
+@login_required
+def referral_stats():
+    user_id = session['user_id']
+    total_invitees = Referral.query.filter_by(referrer_user_id=user_id).count()
+    return jsonify({'success': True, 'stats': {'total_invitees': total_invitees}})

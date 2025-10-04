@@ -39,6 +39,7 @@ def deduct_points(user_id, points_to_deduct):
     # 在大型应用中，这部分逻辑可能需要更复杂的事务管理。
     if not user_id:
         return
+    conn = None
     try:
         conn = sqlite3.connect(current_app.config['USER_DB_NAME'])
         cursor = conn.cursor()

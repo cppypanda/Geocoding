@@ -10,6 +10,9 @@ class Config:
     """Base configuration class."""
     SECRET_KEY = os.environ.get('SECRET_KEY', 'a_default_highly_secret_and_static_key_for_dev')
     
+    # Database paths
+    USER_DB_NAME = os.path.join(_PROJECT_ROOT, 'database', 'user_data.db')
+
     # SQLAlchemy a configuration
     # Read the database URL from an environment variable, with a fallback to a local SQLite DB for development
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 

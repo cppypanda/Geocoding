@@ -20,7 +20,6 @@ let state = {
     manualSelectMarker: null,
     selectedPoiIndex: null, // 记录选中的POI索引
     isManualMarkMode: false,
-    manualMarkListener: null,
     currentAdminDistrict: '', // For smart search context
     apiMarkersGroup: null, // 新增：用于管理候选标记点的图层组
     // 关键词锁定（针对当前记录生效）
@@ -622,9 +621,7 @@ function toggleManualMarkMode() {
         manualMarkBtn.classList.remove('btn-danger');
         manualMarkBtn.classList.add('btn-info');
         mapContainer.style.cursor = '';
-        if (state.manualMarkListener) {
-            state.itemCalibrationMap.off('click', onMapClickForManualMark);
-        }
+        state.itemCalibrationMap.off('click', onMapClickForManualMark);
         if(state.manualSelectMarker) {
             state.itemCalibrationMap.removeLayer(state.manualSelectMarker);
             state.manualSelectMarker = null;

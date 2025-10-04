@@ -310,6 +310,8 @@ class TiandituSearcher(BaseSearcher):
             post_data["specify"] = admin_specify
             # 区域搜索时，可以使用一个较精细的默认级别
             post_data["level"] = "10" 
+            # 修正：即使是区域搜索，mapBound 也是必填项。我们提供一个足够大的默认值。
+            post_data["mapBound"] = "73,3,136,54"
         else:
             current_app.logger.info("[TDT_SEARCH] 未找到行政区, 使用中国范围进行全国搜索")
             # 全国搜索时，使用一个较宏观的级别和全国范围的Bound
