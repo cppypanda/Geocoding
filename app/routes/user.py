@@ -7,13 +7,14 @@ import secrets
 import string
 
 from flask import Blueprint, request, jsonify, session, current_app
+from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
 from .. import db
 from ..models import (User, Feedback, GeocodingHistory, Notification, 
                       UserApiKey, Referral, Task, LocationType)
 from ..services import user_service, llm_service
-from ..utils.auth import login_required
+from ..utils.storage import upload_file_to_r2
 
 user_bp = Blueprint('user', __name__, url_prefix='/user')
 
@@ -22,7 +23,7 @@ REFERRAL_POINTS_PER_SIDE = 50
 @user_bp.route('/profile', methods=['GET'])
 @login_required
 def get_profile():
-    user = user_service.get_user_by_id(session['user_id'])
+    user = user_service.get_user_by_id(current_user.id)
     if user:
         user_info = {
             'id': user.id,
@@ -42,37 +43,63 @@ def get_profile():
         return jsonify({'success': True, 'user': user_info})
     return jsonify({'success': False, 'message': '用户未找到'}), 404
 
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in {'png', 'jpg', 'jpeg', 'gif'}
+
+@user_bp.route('/upload_feedback_image', methods=['POST'])
+@login_required
+def upload_feedback_image():
+    if 'image' not in request.files:
+        return jsonify({'success': False, 'message': '没有文件部分'}), 400
+    
+    file = request.files['image']
+    
+    if file.filename == '':
+        return jsonify({'success': False, 'message': '未选择文件'}), 400
+        
+    if file and allowed_file(file.filename):
+        file_url = upload_file_to_r2(file, folder='feedback')
+        if file_url:
+            return jsonify({'success': True, 'image_url': file_url})
+        else:
+            return jsonify({'success': False, 'message': '图片上传失败，请重试。'}), 500
+            
+    return jsonify({'success': False, 'message': '文件类型不允许'}), 400
+
 @user_bp.route('/feedback', methods=['POST'])
 @login_required
-def submit_feedback():
+def feedback():
     data = request.json
     feedback_text = data.get('feedback_text')
-    
+    # The frontend sends a JSON string of a list of URLs
+    image_urls_str = data.get('image_paths', '[]')
+
     if not feedback_text:
-        return jsonify({'success': False, 'message': '反馈内容不能为空'}), 400
+        return jsonify({'success': False, 'message': '反馈内容不能为空。'}), 400
 
     new_feedback = Feedback(
-        user_id=session['user_id'],
+        user_id=current_user.id,
         description=feedback_text,
-        image_paths=data.get('image_paths', '[]'),
+        image_paths=image_urls_str,
         category=data.get('category', 'general'),
-        metadata_json=data.get('metadata', '{}') # Use the corrected field name
+        metadata_json=data.get('metadata', '{}')
     )
     
     try:
         db.session.add(new_feedback)
         db.session.commit()
-        return jsonify({'success': True, 'message': '反馈已提交，感谢您的宝贵意见！'})
+        return jsonify({'success': True, 'message': '反馈提交成功！'})
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error submitting feedback: {e}")
-        return jsonify({'success': False, 'message': '提交反馈失败'}), 500
+        return jsonify({'success': False, 'message': '提交反馈失败。'}), 500
 
 @user_bp.route('/social_share_copy', methods=['POST'])
 @login_required
 def generate_social_share_copy():
     """根据用户最近的使用上下文与可选项目描述，生成个性化社交平台推广文案。"""
-    user_id = session['user_id']
+    user_id = current_user.id
     data = request.get_json(silent=True) or {}
     project_context = (data.get('project_context') or '').strip()
     target_platforms = data.get('platforms') or []
@@ -179,36 +206,10 @@ def generate_social_share_copy():
         )
         return jsonify({'success': True, 'copy': fallback})
 
-@user_bp.route('/upload_feedback_image', methods=['POST'])
-@login_required
-def upload_feedback_image():
-    if 'image' not in request.files:
-        return jsonify({'success': False, 'message': '没有文件部分'}), 400
-    
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'success': False, 'message': '未选择文件'}), 400
-    
-    if file:
-        filename = secure_filename(file.filename)
-        # 确保 uploads/feedback 目录存在
-        # os.path.join(current_app.root_path, config.FEEDBACK_UPLOAD_FOLDER)
-        # config.FEEDBACK_UPLOAD_FOLDER 已经是一个绝对路径
-        upload_path = current_app.config['FEEDBACK_UPLOAD_FOLDER'] # 使用应用配置中的绝对路径
-        os.makedirs(upload_path, exist_ok=True)
-        
-        filepath = os.path.join(upload_path, filename)
-        file.save(filepath)
-        # 返回相对于项目根目录的路径，或者直接返回绝对路径
-        # 这里返回一个相对于 uploads 目录的路径，前端可能期望这样的路径
-        relative_path = os.path.join('uploads', 'feedback', filename).replace('\\', '/') # 统一斜杠方向
-        return jsonify({'success': True, 'message': '图片上传成功', 'image_url': f'/{relative_path}'})
-    return jsonify({'success': False, 'message': '文件上传失败'}), 500
-
 @user_bp.route('/history', methods=['GET'])
 @login_required
 def get_history():
-    user_id = session['user_id']
+    user_id = current_user.id
     history_records = GeocodingHistory.query.filter_by(user_id=user_id).order_by(GeocodingHistory.created_at.desc()).limit(50).all()
     
     history_list = []
@@ -228,7 +229,7 @@ def get_history():
 @user_bp.route('/delete_history', methods=['POST'])
 @login_required
 def delete_history():
-    user_id = session['user_id']
+    user_id = current_user.id
     history_id = request.json.get('history_id')
 
     if not history_id:
@@ -266,7 +267,7 @@ def get_session_results_route():
 @user_bp.route('/save_calibration_result', methods=['POST'])
 @login_required
 def save_calibration_result():
-    user_id = session['user_id']
+    user_id = current_user.id
     data = request.json
     original_address = data.get('original_address')
     selected_result_index = data.get('selected_result_index')
@@ -309,7 +310,7 @@ def save_calibration_result():
 @user_bp.route('/get_notifications', methods=['GET'])
 @login_required
 def get_notifications():
-    user_id = session['user_id']
+    user_id = current_user.id
     page = request.args.get('page', 1, type=int)
     limit = request.args.get('limit', 10, type=int)
     
@@ -329,14 +330,14 @@ def get_notifications():
 @user_bp.route('/notifications/unread_count', methods=['GET'])
 @login_required
 def get_unread_notifications_count():
-    user_id = session['user_id']
+    user_id = current_user.id
     unread_count = Notification.query.filter_by(user_id=user_id, is_read=False).count()
     return jsonify({'success': True, 'unread_count': unread_count})
 
 @user_bp.route('/mark_notifications_as_read', methods=['POST'])
 @login_required
 def mark_notifications_as_read():
-    user_id = session['user_id']
+    user_id = current_user.id
     notification_ids = request.json.get('ids', [])
 
     if not notification_ids or not isinstance(notification_ids, list):
@@ -357,7 +358,7 @@ def mark_notifications_as_read():
 @user_bp.route('/keys', methods=['GET'])
 @login_required
 def get_user_api_keys():
-    user_id = session['user_id']
+    user_id = current_user.id
     keys = UserApiKey.query.filter_by(user_id=user_id).all()
     
     masked_keys = []
@@ -466,7 +467,7 @@ def _validate_zhipuai_key(api_key):
 @user_bp.route('/keys', methods=['POST'])
 @login_required
 def save_user_api_key():
-    user_id = session['user_id']
+    user_id = current_user.id
     data = request.json
     service_name = data.get('service_name')
     api_key = data.get('api_key')
@@ -537,7 +538,7 @@ def _generate_unique_referral_code():
 @user_bp.route('/referral/info', methods=['GET'])
 @login_required
 def get_referral_info():
-    user = user_service.get_user_by_id(session['user_id'])
+    user = user_service.get_user_by_id(current_user.id)
     if not user:
         return jsonify({'success': False, 'message': '用户未找到'}), 404
 
@@ -575,7 +576,7 @@ def bind_referral():
     if not code:
         return jsonify({'success': False, 'message': '推荐码不能为空'}), 400
 
-    invitee = user_service.get_user_by_id(session['user_id'])
+    invitee = user_service.get_user_by_id(current_user.id)
     if not invitee:
         return jsonify({'success': False, 'message': '用户未找到'}), 404
 
@@ -610,6 +611,6 @@ def bind_referral():
 @user_bp.route('/referral/stats', methods=['GET'])
 @login_required
 def referral_stats():
-    user_id = session['user_id']
+    user_id = current_user.id
     total_invitees = Referral.query.filter_by(referrer_user_id=user_id).count()
     return jsonify({'success': True, 'stats': {'total_invitees': total_invitees}})

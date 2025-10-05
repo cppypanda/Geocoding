@@ -691,19 +691,12 @@
                         </div>
 
                         <div class="col-md-5">
-                            <h6 class="text-center mb-2">3. 扫码支付</h6>
+                            <h6 class="text-center mb-2">3. 确认支付</h6>
                             <div class="qr-code-wrapper d-flex align-items-center justify-content-center" style="position: relative; min-height: 240px; background-color: #f8f9fa; border-radius: 15px;">
-                                <div id="qrCodePlaceholder" class="text-center p-3">
-                                    <span class="text-muted">请先选择套餐与支付方式</span>
-                                </div>
-                                <div id="qrCodeArea" class="text-center p-3" style="display: none;">
-                                    <img alt="支付二维码" id="paymentQrCode" style="width:160px; height:160px; border-radius: 8px; margin-bottom: 10px;">
-                                    <p class="mb-1 small">需支付: <strong id="amountToPay" class="text-danger"></strong> 元</p>
-                                    <div class="input-group input-group-sm">
-                                        <input type="text" id="orderNumberDisplay" class="form-control" placeholder="订单号" readonly>
-                                        <button class="btn btn-outline-secondary" type="button" id="copyOrderNumberBtn" title="复制订单号"><i class="bi bi-clipboard"></i></button>
-                                    </div>
-                                    <p class="small text-primary mt-1" style="font-size: 0.75rem;">支付时请务必备注订单号</p>
+                                <div id="payment-info-area" class="text-center p-3">
+                                    <i class="bi bi-credit-card-2-front text-primary" style="font-size: 4rem;"></i>
+                                    <p class="mt-3 mb-1">应付金额: <strong id="amountToPay" class="text-danger">0.00</strong> 元</p>
+                                    <p class="text-muted small">选择套餐和支付方式后，点击下方按钮将跳转至支付宝官方页面完成支付。</p>
                                 </div>
                             </div>
                         </div>
@@ -711,7 +704,7 @@
                 </div>
                 <div class="modal-footer border-0">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" id="confirmPaymentBtn" disabled>我已完成支付</button>
+                    <button type="button" class="btn btn-primary" id="initiateAlipayBtn" disabled><i class="bi bi-shield-check"></i> 前往支付宝安全支付</button>
                 </div>
             </div>
         </div>
@@ -735,8 +728,7 @@
                                     <h6 class="card-title">配置 API Key</h6>
                                     <p class="card-text small text-muted">配置您的地图或AI API Key，即可获得积分奖励</p>
                                     <div class="mt-3">
-                                        <span class="badge bg-success">+100 积分</span>
-                                        <span class="badge bg-info ms-1">+200 积分</span>
+                                        <span class="badge bg-success">+{{ points_award_range.min }} ~ {{ points_award_range.max }} 积分</span>
                                     </div>
                                     <button type="button" class="btn btn-primary btn-sm mt-3" id="openApiKeysTabBtn">
                                         <i class="bi bi-arrow-right"></i> 立即配置
@@ -754,7 +746,7 @@
                                     <h6 class="card-title">分享推荐</h6>
                                     <p class="card-text small text-muted">邀请朋友使用陆梧GeoCo，双方都可获得积分奖励</p>
                                     <div class="mt-2">
-                                        <span class="badge bg-warning text-dark">+50 积分/人（双方）</span>
+                                        <span class="badge bg-warning text-dark">邀请方 +{{ referral_award.referrer or 0 }} / 被邀方 +{{ referral_award.invitee or 0 }}</span>
                                     </div>
                                     <div class="mt-3 text-start small">
                                         <div class="mb-2"><strong>我的推荐码：</strong><span id="referralCodeText" class="text-primary">--</span>
@@ -801,7 +793,7 @@
                                     </div>
                                     <p class="small text-muted mb-2">在微信公众号、朋友圈、专业群、小红书等平台发布推广内容，并上传截图（含粉丝量、浏览/收藏量等）通过意见反馈提交，作者将根据传播效果给予额外积分。</p>
                                     <div class="mb-2">
-                                        <textarea class="form-control" id="socialShareCopyText" rows="3" placeholder="点击“生成文案”自动生成可复制的宣传文案"></textarea>
+                                        <textarea class="form-control" id="socialShareCopyText" rows="3" placeholder="点击"生成文案"自动生成可复制的宣传文案"></textarea>
                                     </div>
                                     <div class="d-flex gap-2">
                                         <button type="button" class="btn btn-outline-primary btn-sm" id="generateSocialCopyBtn"><i class="bi bi-stars"></i> 生成文案</button>
@@ -924,7 +916,7 @@
                                         <input type="password" class="form-control" id="confirmNewPasswordInSettings" placeholder="请再次输入新密码">
                                     </div>
                                     <button type="button" class="btn btn-primary" id="changePasswordBtn">保存新密码</button>
-                                    <small class="text-muted d-block mt-2">提示：若您的账号是邮箱验证码登录且未设置过密码，请在登录窗口使用“注册/设置密码”。</small>
+                                    <small class="text-muted d-block mt-2">提示：若您的账号是邮箱验证码登录且未设置过密码，请在登录窗口使用"注册/设置密码"。</small>
                                 </div>
                                 <div class="tab-pane fade" id="apikeys-pane" role="tabpanel" aria-labelledby="apikeys-tab">
                                     <h5>API Key配置</h5>
@@ -932,22 +924,22 @@
                                     <div class="mb-3">
                                         <label for="settingsAmapKey" class="form-label d-flex justify-content-between align-items-center">高德地图 API Key <a href="https://lbs.amap.com/api/javascript-api/guide/abc/prepare" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
                                         <input type="text" class="form-control" id="settingsAmapKey" placeholder="请输入高德地图 API Key" data-service-name="amap">
-                                        <small id="amapKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                        <small id="amapKeyHelpText" class="form-text text-muted">成功配置后，您将获得{{ points_award_by_service.amap or 0 }}积分。</small>
                                     </div>
                                     <div class="mb-3">
                                         <label for="settingsBaiduKey" class="form-label d-flex justify-content-between align-items-center">百度地图 API Key <a href="https://lbsyun.baidu.com/index.php?title=jspopularGL" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
                                         <input type="text" class="form-control" id="settingsBaiduKey" placeholder="请输入百度地图 API Key" data-service-name="baidu">
-                                        <small id="baiduKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                        <small id="baiduKeyHelpText" class="form-text text-muted">成功配置后，您将获得{{ points_award_by_service.baidu or 0 }}积分。</small>
                                     </div>
                                     <div class="mb-3">
                                         <label for="settingsTiandituKey" class="form-label d-flex justify-content-between align-items-center">天地图 API Key <a href="https://www.tianditu.gov.cn/" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
                                         <input type="text" class="form-control" id="settingsTiandituKey" placeholder="请输入天地图 API Key" data-service-name="tianditu">
-                                        <small id="tiandituKeyHelpText" class="form-text text-muted">成功配置后，您将获得100积分。</small>
+                                        <small id="tiandituKeyHelpText" class="form-text text-muted">成功配置后，您将获得{{ points_award_by_service.tianditu or 0 }}积分。</small>
                                     </div>
                                      <div class="mb-3">
                                         <label for="settingsAIKey" class="form-label d-flex justify-content-between align-items-center">AI 大模型 API Key <a href="https://open.bigmodel.cn/" target="_blank" class="badge bg-info-subtle text-info text-decoration-none"><i class="bi bi-link-45deg"></i> 教程</a></label>
                                         <input type="text" class="form-control" id="settingsAIKey" placeholder="请输入AI大模型 API Key（用于智能搜索）" data-service-name="zhipuai">
-                                        <small id="aiKeyHelpText" class="form-text text-muted">成功配置后，您将获得200积分。</small>
+                                        <small id="aiKeyHelpText" class="form-text text-muted">成功配置后，您将获得{{ points_award_by_service.zhipuai or 0 }}积分。</small>
                                     </div>
                                     <button type="button" class="btn btn-primary" id="saveApiKeysBtn">保存API Keys</button>
                                 </div>
@@ -1017,10 +1009,10 @@
                                 <ol class="mb-3">
                                     <li>登录账户（未登录将无法开始编码）。</li>
                                     <li>将地址粘贴到输入框，每行一个地址。</li>
-                                    <li>点击“多源编码”开始获取候选结果。</li>
-                                    <li>点击“智能编码”可一键完成编码并自动校准。</li>
-                                    <li>在批量结果中确认合适结果，或进入“逐条查看与校准”。</li>
-                                    <li>确认后，点击“导出文件”下载为 Excel/KML/SHP。</li>
+                                    <li>点击"多源编码"开始获取候选结果。</li>
+                                    <li>点击"智能编码"可一键完成编码并自动校准。</li>
+                                    <li>在批量结果中确认合适结果，或进入"逐条查看与校准"。</li>
+                                    <li>确认后，点击"导出文件"下载为 Excel/KML/SHP。</li>
                                 </ol>
                             </div>
                             <div class="col-12">
@@ -1028,13 +1020,13 @@
                                 <ul class="mb-3">
                                     <li>数据清洗：支持自动分行、统一省市前缀、自动补全行政区划。</li>
                                     <li>地址查找工具：在地图上搜索并选择更精准的地点。</li>
-                                    <li>API Key 配置：在“设置”中填写各地图/AI Key，可提升额度与体验。</li>
+                                    <li>API Key 配置：在"设置"中填写各地图/AI Key，可提升额度与体验。</li>
                                     <li>积分与充值：右上角可查看积分，支持充值与活动获取。</li>
                                 </ul>
                             </div>
                             <div class="col-12">
                                 <div class="alert alert-info mb-0">
-                                    提示：如遇问题，欢迎通过“意见反馈”联系我们。
+                                    提示：如遇问题，欢迎通过"意见反馈"联系我们。
                                 </div>
                             </div>
                         </div>
@@ -1134,6 +1126,8 @@
         // 将后端配置的天地图/高德Key注入到前端全局（仅用于前端瓦片服务等公开用途）
         window.__TDT_KEY__ = "{{ TIANDITU_KEY or '' }}";
         window.__AMAP_KEY__ = "{{ AMAP_KEY or '' }}";
+        // 将积分奖励配置注入到前端全局，供JS模块使用
+        window.__POINTS_AWARD_BY_SERVICE__ = JSON.parse('{{ points_award_by_service | tojson | safe }}');
     </script>
     <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.1" type="module"></script>
 </body>

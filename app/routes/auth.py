@@ -7,6 +7,7 @@ import json # For image_paths in feedback, though feedback routes go to user.py
 
 from flask import Blueprint, request, jsonify, session, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_login import login_user, logout_user, current_user
 
 from .. import config # 导入顶层配置
 from ..services import user_service, email_service # 导入用户和邮件服务
@@ -96,12 +97,8 @@ def login_register_email():
             return jsonify({'success': False, 'message': '创建新用户失败'}), 500
         new_user_created = True
 
+    login_user(user, remember=True)
     user_service.update_user_last_login(user.id)
-    session['user_id'] = user.id
-    session['username'] = user.username
-    session['email'] = user.email
-    session['is_admin'] = user.is_admin
-    session.permanent = True
     
     user_info = {
         'id': user.id,
@@ -117,27 +114,22 @@ def login_register_email():
 
 @auth_bp.route('/logout', methods=['GET'])
 def logout():
-    session.clear()
+    logout_user()
     return jsonify({'success': True, 'message': '已退出登录'})
 
 @auth_bp.route('/check_login_status', methods=['GET'])
 def check_login_status():
-    if 'user_id' not in session:
-        return jsonify({'logged_in': False})
-    
-    user = user_service.get_user_by_id(session['user_id'])
-    if user:
+    if current_user.is_authenticated:
         user_info = {
-            'id': user.id,
-            'email': user.email,
-            'username': user.username or user.email.split('@')[0],
-            'points': user.points,
-            'is_admin': user.is_admin,
-            'avatar_url': user.avatar_url
+            'id': current_user.id,
+            'email': current_user.email,
+            'username': current_user.username or current_user.email.split('@')[0],
+            'points': current_user.points,
+            'is_admin': current_user.is_admin,
+            'avatar_url': current_user.avatar_url
         }
         return jsonify({'logged_in': True, 'user': user_info})
     else:
-        session.clear()
         return jsonify({'logged_in': False})
 
 @auth_bp.route('/register_set_password', methods=['POST'])
@@ -192,11 +184,7 @@ def register_set_password():
     
     # Unified login logic after setting/creating password
     final_user = user_service.get_user_by_email(email)
-    session['user_id'] = final_user.id
-    session['username'] = final_user.username
-    session['email'] = final_user.email
-    session['is_admin'] = final_user.is_admin
-    session.permanent = True
+    login_user(final_user, remember=True)
     
     user_info = {
         'id': final_user.id,
@@ -223,12 +211,8 @@ def login_account():
     user = user_service.get_user_by_username(username_or_email) or user_service.get_user_by_email(username_or_email)
     
     if user:
+        login_user(user, remember=True)
         user_service.update_user_last_login(user.id)
-        session['user_id'] = user.id
-        session['username'] = user.username
-        session['email'] = user.email
-        session['is_admin'] = user.is_admin
-        session.permanent = True
 
         user_info = {
             'id': user.id,
@@ -244,7 +228,7 @@ def login_account():
 
 @auth_bp.route('/update_username', methods=['POST'])
 def update_username():
-    if 'user_id' not in session:
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '未登录'}), 401
     
     data = request.json
@@ -253,7 +237,7 @@ def update_username():
     if not new_username or not isinstance(new_username, str) or not (1 <= len(new_username) <= 20):
         return jsonify({'success': False, 'message': '用户名长度应为1-20个字符'}), 400
 
-    user_id = session['user_id']
+    user_id = current_user.id
     
     # Check if username is taken by another user
     existing_user = user_service.get_user_by_username(new_username)
@@ -278,10 +262,10 @@ def update_username():
 
 @auth_bp.route('/update_api_keys', methods=['POST'])
 def update_api_keys():
-    if 'user_id' not in session:
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '未登录'}), 401
     
-    user_id = session['user_id']
+    user_id = current_user.id
     data = request.json
 
     # Instead of updating the users table directly, this logic should be in user_service
@@ -349,28 +333,26 @@ def reset_password():
 
 @auth_bp.route('/get_user_info')
 def get_user_info():
-    if 'user_id' not in session:
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '用户未登录'}), 401
     
-    user = user_service.get_user_by_id(session['user_id'])
-    if user:
-        user_info = {
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'points': user.points,
-            'avatar_url': user.avatar_url
-            # Add other fields as needed
-        }
-        return jsonify({'success': True, 'user': user_info})
-    return jsonify({'success': False, 'message': '找不到用户'}), 404
+    user = current_user
+    user_info = {
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'points': user.points,
+        'avatar_url': user.avatar_url
+        # Add other fields as needed
+    }
+    return jsonify({'success': True, 'user': user_info})
 
 @auth_bp.route('/update_user_profile', methods=['POST'])
 def update_user_profile():
-    if 'user_id' not in session:
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '用户未登录'}), 401
 
-    user_id = session['user_id']
+    user_id = current_user.id
     data = request.json
     new_username = data.get('username', '').strip()
 
@@ -387,7 +369,7 @@ def update_user_profile():
 
     if user_service.update_username(user_id, new_username):
         # 更新 session 中的用户名
-        session['username'] = new_username
+        # No need to update session manually, it's handled by Flask-Login
         
         # 获取最新的用户信息并返回
         updated_user = user_service.get_user_by_id(user_id)
@@ -405,7 +387,7 @@ def update_user_profile():
 
 @auth_bp.route('/change_password', methods=['POST'])
 def change_password():
-    if 'user_id' not in session:
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '未登录'}), 401
 
     data = request.json or {}
@@ -423,8 +405,8 @@ def change_password():
         return jsonify({'success': False, 'message': '新密码长度至少为6位'}), 400
 
     # 获取当前用户
-    user = user_service.get_user_by_id(session['user_id'])
-    if not user:
+    user = current_user
+    if not user: # Should not happen if authenticated
         return jsonify({'success': False, 'message': '用户不存在'}), 404
 
     # 校验旧密码（若用户原本为验证码登录且未设置密码，则拒绝）

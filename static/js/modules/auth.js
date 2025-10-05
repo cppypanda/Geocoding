@@ -75,18 +75,16 @@ async function refreshApiKeysStatus() {
         tianditu: 'tiandituKeyHelpText',
         zhipuai: 'aiKeyHelpText'
     };
-    const defaultHelpTextByService = {
-        amap: '成功配置后，您将获得100积分。',
-        baidu: '成功配置后，您将获得100积分。',
-        tianditu: '成功配置后，您将获得100积分。',
-        zhipuai: '成功配置后，您将获得200积分。'
-    };
+    
+    // 从全局变量（由模板注入）或回退到空对象来获取奖励配置
+    const pointsAwardConfig = window.__POINTS_AWARD_BY_SERVICE__ || {};
 
     // 先设置为默认文案（未配置）
     for (const [serviceName, helpId] of Object.entries(helpIdByService)) {
         const helpEl = document.getElementById(helpId);
         if (helpEl) {
-            helpEl.textContent = defaultHelpTextByService[serviceName] || '';
+            const award = pointsAwardConfig[serviceName] || 0;
+            helpEl.textContent = `成功配置后，您将获得${award}积分。`;
             helpEl.classList.add('text-muted');
             helpEl.classList.remove('text-success');
         }

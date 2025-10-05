@@ -8,6 +8,7 @@ from datetime import datetime
 import jionlp as jio
 
 from flask import Blueprint, request, jsonify, session, current_app, send_file
+from flask_login import login_required, current_user
 
 from .. import config
 from ..services import geocoding_apis, poi_search, llm_service
@@ -15,8 +16,9 @@ from ..services.web_search_local import search_sogou
 from ..utils import geo_transforms, decorators, api_managers, address_processing
 from ..utils.auth import login_required
 from ..utils.log_context import request_context_var
-from ..models import LocationType # Import the model
+from ..models import LocationType, User # Import the model
 from .. import db # Import db instance
+from ..services import user_service
 
 geocoding_bp = Blueprint('geocoding', __name__, url_prefix='/geocode')
 
@@ -34,23 +36,33 @@ def load_session_results(session_id, original_address):
     return geocoding_session_data.get(session_id, {}).get(original_address)
 
 def deduct_points(user_id, points_to_deduct):
-    """为指定用户扣除积分。"""
-    # 这是一个简化的积分扣除实现，直接操作数据库。
-    # 在大型应用中，这部分逻辑可能需要更复杂的事务管理。
-    if not user_id:
+    """为指定用户扣除积分（使用SQLAlchemy）。"""
+    if not user_id or points_to_deduct <= 0:
         return
-    conn = None
+
     try:
-        conn = sqlite3.connect(current_app.config['USER_DB_NAME'])
-        cursor = conn.cursor()
-        # 使用悲观锁确保数据一致性，但对于SQLite，连接本身就是文件锁
-        cursor.execute("UPDATE users SET points = points - ? WHERE id = ?", (points_to_deduct, user_id))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"为用户 {user_id} 扣除积分时发生错误: {e}")
-    finally:
-        if conn:
-            conn.close()
+        user = User.query.get(user_id)
+        if user:
+            # 确保积分不会成为负数
+            if user.points is None:
+                user.points = 0
+            
+            if user.points >= points_to_deduct:
+                user.points -= points_to_deduct
+            else:
+                current_app.logger.warning(f"用户 {user_id} 积分不足 (剩余 {user.points}, 需要 {points_to_deduct})，操作未执行。")
+                # 可选：如果积分为0，则不扣除
+                user.points = 0
+            
+            db.session.commit()
+            current_app.logger.info(f"成功为用户 {user_id} 扣除 {points_to_deduct} 积分。剩余积分: {user.points}")
+        else:
+            current_app.logger.error(f"尝试扣分失败：未找到ID为 {user_id} 的用户。")
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"为用户 {user_id} 扣除积分时发生数据库异常: {e}", exc_info=True)
+
 
 def get_points_cost(task_name, used_user_key, token_count=0):
     """
@@ -448,7 +460,7 @@ def geocode_address_batch():
         if not raw_addresses:
             return jsonify({'success': False, 'results': [], 'message': 'Addresses list cannot be empty'}), 400
 
-        user_id = session.get('user_id')
+        user_id = current_user.id if current_user.is_authenticated else None
 
         # Debug flag
         debug = bool(data.get('debug'))
@@ -589,8 +601,8 @@ def wi_search_collate():
 
         # 新策略：网络搜索（本地搜狗抓取也视为“网络搜索”）按 2 分计费
         try:
-            user_id = session.get('user_id')
-            if user_id:
+            if current_user.is_authenticated:
+                user_id = current_user.id
                 points_to_deduct = get_points_cost('web_search', used_user_key=False)
                 if points_to_deduct and points_to_deduct > 0:
                     deduct_points(user_id, points_to_deduct)
@@ -631,14 +643,21 @@ def wi_validate_candidates():
         }
         # 新策略：本接口会触发一次 LLM 调用，按 2 分计费
         try:
-            user_id = session.get('user_id')
-            if user_id:
+            if current_user.is_authenticated:
+                user_id = current_user.id
                 points_to_deduct = get_points_cost('llm_call', used_user_key=False)
                 if points_to_deduct and points_to_deduct > 0:
                     deduct_points(user_id, points_to_deduct)
                     current_app.logger.info(f"计费：POI验证 LLM 扣除 {points_to_deduct} 积分。")
+                
+                # 返回最新的用户信息
+                updated_user = user_service.get_user_by_id(user_id)
+                if updated_user:
+                    response_payload['user'] = {
+                        'points': updated_user.points
+                    }
         except Exception as e:
-            current_app.logger.error(f"POI验证扣分异常: {e}")
+            current_app.logger.error(f"POI验证扣分或刷新用户信息异常: {e}")
 
         return jsonify(response_payload)
     except Exception as e:
@@ -794,8 +813,8 @@ def wi_suggest_keywords():
 
         # 新策略：本接口会触发一次 LLM 调用，按 2 分计费
         try:
-            user_id = session.get('user_id')
-            if user_id:
+            if current_user.is_authenticated:
+                user_id = current_user.id
                 points_to_deduct = get_points_cost('llm_call', used_user_key=False)
                 if points_to_deduct and points_to_deduct > 0:
                     deduct_points(user_id, points_to_deduct)
@@ -803,7 +822,13 @@ def wi_suggest_keywords():
         except Exception as e:
             current_app.logger.error(f"关键词建议扣分异常: {e}")
 
-        return jsonify({'success': True, 'keyword_suggestions': suggestions, 'mismatch_reasons': mismatch_reasons})
+        response_data = {'success': True, 'keyword_suggestions': suggestions, 'mismatch_reasons': mismatch_reasons}
+        if current_user.is_authenticated:
+            updated_user = user_service.get_user_by_id(current_user.id)
+            if updated_user:
+                response_data['user'] = {'points': updated_user.points}
+
+        return jsonify(response_data)
     except Exception as e:
         current_app.logger.error(f"/web_intelligence/suggest_keywords 异常: {e}")
         return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500
@@ -821,7 +846,7 @@ async def poi_search_route():
 
         keyword = data.get('keyword')
         source = data.get('source', 'amap') # Default to amap if not provided
-        user_id = session.get('user_id')
+        user_id = current_user.id if current_user.is_authenticated else None
 
         if not keyword:
             return jsonify({'success': False, 'results': [], 'message': '搜索关键词不能为空'}), 400
@@ -854,7 +879,13 @@ async def poi_search_route():
         except Exception as e:
             current_app.logger.error(f"POI搜索扣分异常: {e}")
 
-        return jsonify({'success': True, 'results': results.get('pois', [])})
+        response_data = {'success': True, 'results': results.get('pois', [])}
+        if user_id:
+            updated_user = user_service.get_user_by_id(user_id)
+            if updated_user:
+                response_data['user'] = {'points': updated_user.points}
+
+        return jsonify(response_data)
 
     except Exception as e:
         current_app.logger.error(f"POI搜索路由 /poi_search 发生异常: {e}", exc_info=True)
@@ -876,7 +907,7 @@ async def auto_select_point_route():
         pois = data.get('pois') or data.get('poi_results')
         original_address = data.get('original_address')
         source_context = data.get('source_context', '无附加上下文')
-        user_id = session.get('user_id')
+        user_id = current_user.id if current_user.is_authenticated else None
 
         if not pois or not original_address:
             return jsonify({'success': False, 'message': '缺少POI列表或原始地址'}), 400
@@ -905,13 +936,19 @@ async def auto_select_point_route():
             # 使用LLM返回的索引信息
             index = selected_poi.get('selected_index')
             if index is not None and 0 <= index < len(pois):
-                return jsonify({
+                response_data = {
                     'success': True, 
-                    # 'result': {'index': index}, # Keep the response flat for simplicity
                     'best_match_index': index,
                     'best_match': pois[index], # Return the full POI object as well
                     'reasoning': selected_poi.get('reasoning', '')
-                })
+                }
+                if user_id:
+                    updated_user = user_service.get_user_by_id(user_id)
+                    if updated_user:
+                        response_data['user'] = {
+                            'points': updated_user.points
+                        }
+                return jsonify(response_data)
             else:
                 return jsonify({'success': False, 'message': 'LLM未返回有效的索引信息'})
         elif selected_poi and 'error' in selected_poi:
@@ -944,7 +981,7 @@ async def reverse_geocode_route():
         if lat is None or lng is None:
             return jsonify({'success': False, 'message': '缺少坐标参数'}), 400
 
-        user_id = session.get('user_id')
+        user_id = current_user.id if current_user.is_authenticated else None
         
         # 使用统一的地理编码器工厂方法
         try:

@@ -1,300 +1,261 @@
 import uuid
-from flask import Blueprint, request, jsonify, session, current_app, render_template, abort, flash, redirect, url_for
+from flask import Blueprint, request, jsonify, current_app, render_template, abort, flash, redirect, url_for
+from flask_login import login_required, current_user
 from datetime import datetime
-import sqlite3
+from .. import db
+from ..models import User, RechargeOrder, Notification, Feedback
+
+from app.utils.alipay import get_alipay_client
 
 payment_bp = Blueprint('payment_bp', __name__)
 
-def get_db_connection():
-    """Gets a database connection for user_data.db."""
-    db_path = current_app.config['USER_DB_NAME']
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 def create_notification(user_id, message, link=None):
-    """Creates a new notification for a user."""
-    conn = get_db_connection()
+    """Creates a new notification for a user using SQLAlchemy."""
     try:
-        conn.execute(
-            "INSERT INTO notifications (user_id, message, link) VALUES (?, ?, ?)",
-            (user_id, message, link)
-        )
-        conn.commit()
-    except sqlite3.Error as e:
+        notification = Notification(user_id=user_id, message=message, link=link)
+        db.session.add(notification)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Failed to create notification for user {user_id}: {e}")
-    finally:
-        if conn:
-            conn.close()
 
-# Define the recharge packages. In a real app, this might come from a database.
-RECHARGE_PACKAGES = {
-    'pkg_10': {'name': '入门套餐', 'points': 1000, 'price': 10.00},
-    'pkg_50': {'name': '标准套餐', 'points': 5500, 'price': 50.00},
-    'pkg_100': {'name': '高级套餐', 'points': 12000, 'price': 100.00},
-}
+# In a real app, this might come from a database. For now, using config.
+RECHARGE_PACKAGES_CONFIG_KEY = 'RECHARGE_PACKAGES'
 
 @payment_bp.route('/create_recharge_order', methods=['POST'])
+@login_required
 def create_recharge_order():
-    """
-    Creates a new recharge order and returns the order number.
-    """
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'message': '用户未登录'}), 401
+    """Creates a new recharge order and returns the order number."""
+    user_id = current_user.id
 
     data = request.get_json()
     package_id = data.get('package_id')
 
-    if not package_id or package_id not in RECHARGE_PACKAGES:
+    recharge_packages = current_app.config.get(RECHARGE_PACKAGES_CONFIG_KEY, {})
+
+    if not package_id or package_id not in recharge_packages:
         return jsonify({'success': False, 'message': '无效的套餐'}), 400
 
-    package = RECHARGE_PACKAGES[package_id]
+    package = recharge_packages[package_id]
 
-    # Generate a simplified, easy-to-read order number
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        
-        # Get the count of orders for today to generate the sequence number
         today_str = datetime.now().strftime('%Y-%m-%d')
-        cursor.execute("SELECT COUNT(id) FROM recharge_orders WHERE DATE(created_at) = ?", (today_str,))
-        todays_order_count = cursor.fetchone()[0]
+        todays_order_count = RechargeOrder.query.filter(db.func.date(RechargeOrder.created_at) == today_str).count()
         
-        # Format: YYYYMMDD-sequence
         date_part = datetime.now().strftime('%Y%m%d')
         order_number = f"{date_part}-{todays_order_count + 1}"
 
-        cursor.execute(
-            """
-            INSERT INTO recharge_orders (user_id, order_number, package_name, amount, points, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (user_id, order_number, package['name'], package['price'], package['points'], 'PENDING')
+        new_order = RechargeOrder(
+            user_id=user_id,
+            order_number=order_number,
+            package_name=package['name'],
+            amount=package['price'],
+            points=package['points'],
+            status='PENDING'
         )
-        conn.commit()
-    except sqlite3.Error as e:
-        conn.close()
+        db.session.add(new_order)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'order_number': order_number,
+            'amount': package['price']
+        })
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Database error on order creation: {e}")
         return jsonify({'success': False, 'message': '创建订单失败'}), 500
-    finally:
-        if conn:
-            conn.close()
 
-    return jsonify({
-        'success': True,
-        'order_number': order_number,
-        'amount': package['price']
-    })
+@payment_bp.route('/initiate_payment', methods=['POST'])
+@login_required
+def initiate_payment():
+    """Receives a request to create an Alipay payment link for an order."""
+    user_id = current_user.id
+
+    data = request.get_json()
+    order_number = data.get('order_number')
+    if not order_number:
+        return jsonify({'success': False, 'message': '缺少订单号'}), 400
+
+    order = RechargeOrder.query.filter_by(order_number=order_number, user_id=user_id, status='PENDING').first()
+
+    if not order:
+        return jsonify({'success': False, 'message': '订单不存在或已处理'}), 404
+
+    alipay = get_alipay_client()
+    return_url = url_for('main.index', _external=True) 
+    notify_url = url_for('payment_bp.alipay_notify', _external=True)
+
+    try:
+        order_string = alipay.api_alipay_trade_page_pay(
+            out_trade_no=order.order_number,
+            total_amount=float(order.amount),
+            subject=f"积分充值 - {order.package_name}",
+            return_url=return_url,
+            notify_url=notify_url
+        )
+        payment_url = current_app.config['ALIPAY_GATEWAY_URL'] + "?" + order_string
+        return jsonify({'success': True, 'payment_url': payment_url})
+    except Exception as e:
+        current_app.logger.error(f"Failed to create Alipay payment URL for order {order_number}: {e}")
+        return jsonify({'success': False, 'message': '创建支付链接失败'}), 500
+
+@payment_bp.route('/payment/alipay_notify', methods=['POST'])
+def alipay_notify():
+    """Alipay asynchronous notification callback."""
+    data = request.form.to_dict()
+    signature = data.pop("sign")
+    current_app.logger.info(f"Received Alipay notification for data: {data}")
+
+    alipay = get_alipay_client()
+    success = alipay.verify(data, signature)
+
+    if success and data["trade_status"] in ("TRADE_SUCCESS", "TRADE_FINISHED"):
+        order_number = data.get('out_trade_no')
+        
+        try:
+            order = RechargeOrder.query.filter_by(order_number=order_number).first()
+            if not order:
+                current_app.logger.warning(f"Alipay notify: Order {order_number} not found.")
+                return "failure", 404
+            
+            if order.status == 'COMPLETED':
+                current_app.logger.info(f"Alipay notify: Order {order_number} already completed.")
+                return "success", 200
+
+            order.status = 'COMPLETED'
+            order.updated_at = datetime.utcnow()
+            
+            user = User.query.get(order.user_id)
+            if user:
+                user.points += order.points
+            
+            db.session.commit()
+            
+            create_notification(order.user_id, f"您的订单 {order_number} 已支付成功，{order.points} 积分已到账！")
+            current_app.logger.info(f"Order {order_number} processed successfully.")
+            return "success", 200
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Database error processing order {order_number}: {e}")
+            return "failure", 500
+    else:
+        current_app.logger.error(f"Alipay signature verification failed for data: {data}")
+        return "failure", 400
 
 @payment_bp.route('/admin/orders')
+@login_required
 def admin_orders():
-    if session.get('is_admin') != 1:
-        abort(403) # Forbidden access
-
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        # Fetch pending orders along with user information
-        cursor.execute("""
-            SELECT o.id, o.order_number, o.package_name, o.amount, o.points, o.status, o.created_at, u.username, u.email
-            FROM recharge_orders o
-            JOIN users u ON o.user_id = u.id
-            WHERE o.status = 'PENDING'
-            ORDER BY o.created_at DESC
-        """)
-        pending_orders_raw = cursor.fetchall()
-
-        # Convert timestamp strings to datetime objects
-        pending_orders = []
-        for order in pending_orders_raw:
-            order_dict = dict(order)
-            if order_dict.get('created_at'):
-                try:
-                    # SQLite stores timestamp as string, convert it to datetime object
-                    order_dict['created_at'] = datetime.strptime(order_dict['created_at'].split('.')[0], '%Y-%m-%d %H:%M:%S')
-                except (ValueError, TypeError):
-                    # Handle cases where the format is unexpected or it's not a string
-                    pass # Keep the original value if conversion fails
-            pending_orders.append(order_dict)
-
-    finally:
-        if conn:
-            conn.close()
-    
+    if not current_user.is_admin:
+        abort(403)
+        
+    pending_orders = RechargeOrder.query.filter_by(status='PENDING').join(User).order_by(RechargeOrder.created_at.desc()).all()
     return render_template('admin/orders.html', orders=pending_orders)
 
 @payment_bp.route('/admin/confirm_order/<int:order_id>', methods=['POST'])
+@login_required
 def admin_confirm_order(order_id):
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
-    conn = get_db_connection()
     try:
-        # Transaction-like control
-        cursor = conn.cursor()
-        
-        # 1. Get order details and lock the row for update
-        cursor.execute("SELECT user_id, points, status, amount FROM recharge_orders WHERE id = ?", (order_id,))
-        order = cursor.fetchone()
-
+        order = RechargeOrder.query.get(order_id)
         if not order:
             flash('订单不存在', 'danger')
             return redirect(url_for('payment_bp.admin_orders'))
-
-        if order['status'] != 'PENDING':
+        if order.status != 'PENDING':
             flash('订单状态不正确，可能已被处理', 'warning')
             return redirect(url_for('payment_bp.admin_orders'))
             
-        # 2. Update user points
-        cursor.execute("UPDATE users SET points = points + ? WHERE id = ?", (order['points'], order['user_id']))
+        user = User.query.get(order.user_id)
+        if user:
+            user.points += order.points
         
-        # 3. Update order status
-        cursor.execute("UPDATE recharge_orders SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (order_id,))
+        order.status = 'COMPLETED'
+        order.updated_at = datetime.utcnow()
         
-        conn.commit()
+        db.session.commit()
 
-        # 4. Create a notification for the user
-        try:
-            notification_message = f"您的 {order['amount']} 元充值已到账，{order['points']} 积分已发放！"
-            create_notification(order['user_id'], notification_message)
-        except Exception as e:
-            current_app.logger.error(f"Failed to create notification after order confirmation for order {order_id}: {e}")
-        
+        create_notification(order.user_id, f"您的 {order.amount} 元充值已到账，{order.points} 积分已发放！")
         flash(f"订单 {order_id} 已确认，积分已成功充值!", 'success')
-
-    except sqlite3.Error as e:
-        if conn:
-            conn.rollback() # Rollback on error
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Error confirming order {order_id}: {e}")
         flash('处理订单时发生数据库错误', 'danger')
-    finally:
-        if conn:
-            conn.close()
-            
+    
     return redirect(url_for('payment_bp.admin_orders'))
 
 @payment_bp.route('/admin/cancel_order/<int:order_id>', methods=['POST'])
+@login_required
 def admin_cancel_order(order_id):
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
-
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
         
-        # Check if the order exists and is pending
-        cursor.execute("SELECT status FROM recharge_orders WHERE id = ?", (order_id,))
-        order = cursor.fetchone()
-
+    try:
+        order = RechargeOrder.query.get(order_id)
         if not order:
             flash('订单不存在', 'danger')
             return redirect(url_for('payment_bp.admin_orders'))
-
-        if order['status'] != 'PENDING':
+        if order.status != 'PENDING':
             flash('订单状态不正确，无法取消', 'warning')
             return redirect(url_for('payment_bp.admin_orders'))
             
-        # Update order status to CANCELLED
-        cursor.execute("UPDATE recharge_orders SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP WHERE id = ?", (order_id,))
-        conn.commit()
+        order.status = 'CANCELLED'
+        order.updated_at = datetime.utcnow()
+        db.session.commit()
         flash(f"订单 {order_id} 已成功取消。", 'info')
-
-    except sqlite3.Error as e:
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Error cancelling order {order_id}: {e}")
         flash('处理订单时发生数据库错误', 'danger')
-    finally:
-        if conn:
-            conn.close()
             
     return redirect(url_for('payment_bp.admin_orders')) 
 
-# ------------------ Admin Feedback Management ------------------
-
 @payment_bp.route('/admin/feedback')
+@login_required
 def admin_feedback_list():
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
-    status_filter = request.args.get('status')  # optional: 'new', 'in_progress', 'resolved', 'archived'
+    status_filter = request.args.get('status')
+    query = Feedback.query.join(User, Feedback.user_id == User.id).order_by(Feedback.submitted_at.desc())
 
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        base_query = (
-            """
-            SELECT f.id, f.description, f.image_paths, f.contact_email, f.submitted_at, f.status,
-                   u.username, u.email
-            FROM feedback f
-            LEFT JOIN users u ON f.user_id = u.id
-            {where}
-            ORDER BY f.submitted_at DESC
-            """
-        )
+    if status_filter:
+        query = query.filter(Feedback.status == status_filter)
 
-        params = []
-        where_clause = ""
-        if status_filter:
-            where_clause = "WHERE f.status = ?"
-            params.append(status_filter)
-
-        cursor.execute(base_query.format(where=where_clause), tuple(params))
-        rows = cursor.fetchall()
-        feedback_list = []
-        for row in rows:
-            item = dict(row)
-            # Normalize image_paths JSON to list
-            try:
-                import json
-                paths = json.loads(item.get('image_paths') or '[]')
-                # Ensure list of strings
-                if isinstance(paths, list):
-                    item['image_paths'] = [p for p in paths if isinstance(p, str)]
-                else:
-                    item['image_paths'] = []
-            except Exception:
-                item['image_paths'] = []
-            feedback_list.append(item)
-    finally:
-        if conn:
-            conn.close()
-
+    feedback_list = query.all()
     return render_template('admin/feedback.html', feedback=feedback_list, status_filter=status_filter)
 
-
 @payment_bp.route('/admin/feedback/<int:feedback_id>/status', methods=['POST'])
+@login_required
 def admin_feedback_update_status(feedback_id: int):
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
     new_status = request.form.get('status', '').strip().lower()
-    allowed_status = {'new', 'in_progress', 'resolved', 'archived'}
-    if new_status not in allowed_status:
+    if new_status not in {'new', 'in_progress', 'resolved', 'archived'}:
         flash('无效的状态值', 'danger')
         return redirect(url_for('payment_bp.admin_feedback_list'))
 
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE feedback SET status = ? WHERE id = ?", (new_status, feedback_id))
-        if cursor.rowcount == 0:
+        feedback_item = Feedback.query.get(feedback_id)
+        if not feedback_item:
             flash('反馈不存在或已被删除', 'warning')
         else:
-            conn.commit()
+            feedback_item.status = new_status
+            db.session.commit()
             flash('状态已更新', 'success')
-    except sqlite3.Error as e:
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Error updating feedback {feedback_id} status: {e}")
         flash('更新状态时发生数据库错误', 'danger')
-    finally:
-        if conn:
-            conn.close()
-
+    
     return redirect(url_for('payment_bp.admin_feedback_list'))
 
-
 @payment_bp.route('/admin/feedback/<int:feedback_id>/reply', methods=['POST'])
+@login_required
 def admin_feedback_reply(feedback_id: int):
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
     reply_text = (request.form.get('reply') or '').strip()
@@ -302,77 +263,57 @@ def admin_feedback_reply(feedback_id: int):
         flash('回复内容不能为空', 'warning')
         return redirect(url_for('payment_bp.admin_feedback_list'))
 
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        # 找到反馈对应的用户
-        cursor.execute("SELECT user_id FROM feedback WHERE id = ?", (feedback_id,))
-        row = cursor.fetchone()
-        if not row or not row['user_id']:
+        feedback_item = Feedback.query.get(feedback_id)
+        if not feedback_item or not feedback_item.user_id:
             flash('反馈不存在或无归属用户', 'danger')
             return redirect(url_for('payment_bp.admin_feedback_list'))
 
-        user_id = row['user_id']
-
-        # 创建通知消息
-        create_notification(user_id, reply_text)
-
-        # 可选：把反馈状态标记为已处理进行中
-        try:
-            cursor.execute("UPDATE feedback SET status = CASE WHEN status='new' THEN 'in_progress' ELSE status END WHERE id = ?", (feedback_id,))
-            conn.commit()
-        except Exception:
-            pass
-
+        create_notification(feedback_item.user_id, reply_text)
+        
+        if feedback_item.status == 'new':
+            feedback_item.status = 'in_progress'
+        db.session.commit()
+        
         flash('已发送消息给用户', 'success')
-    except sqlite3.Error as e:
+    except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"Error replying feedback {feedback_id}: {e}")
         flash('发送消息失败：数据库错误', 'danger')
-    finally:
-        if conn:
-            conn.close()
 
     return redirect(url_for('payment_bp.admin_feedback_list'))
 
-
-# ------------------ Admin Broadcast Notifications ------------------
-
 @payment_bp.route('/admin/notify', methods=['GET', 'POST'])
+@login_required
 def admin_notify():
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
     if request.method == 'GET':
         return render_template('admin/notify.html')
 
-    # POST
-    target = (request.form.get('target') or '').strip()  # 'all' or 'email'
-    email = (request.form.get('email') or '').strip()
-    message = (request.form.get('message') or '').strip()
+    target = request.form.get('target', 'all').strip()
+    email = request.form.get('email', '').strip()
+    message = request.form.get('message', '').strip()
 
     if not message:
         flash('消息内容不能为空', 'warning')
         return redirect(url_for('payment_bp.admin_notify'))
 
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
         user_ids = []
         if target == 'all':
-            cursor.execute("SELECT id FROM users")
-            user_ids = [row['id'] for row in cursor.fetchall()]
-        else:
-            if not email:
-                flash('请输入目标用户邮箱', 'warning')
-                return redirect(url_for('payment_bp.admin_notify'))
-            cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
-            row = cursor.fetchone()
-            if not row:
+            user_ids = [user.id for user in User.query.all()]
+        elif email:
+            user = User.query.filter_by(email=email).first()
+            if not user:
                 flash('指定邮箱的用户不存在', 'danger')
                 return redirect(url_for('payment_bp.admin_notify'))
-            user_ids = [row['id']]
+            user_ids = [user.id]
+        else:
+            flash('请输入目标用户邮箱', 'warning')
+            return redirect(url_for('payment_bp.admin_notify'))
 
-        # 批量创建通知
         created = 0
         for uid in user_ids:
             try:
@@ -380,109 +321,79 @@ def admin_notify():
                 created += 1
             except Exception as e:
                 current_app.logger.error(f"Failed to notify user {uid}: {e}")
-
+        
         flash(f'已发送通知给 {created} 位用户', 'success')
-    except sqlite3.Error as e:
+    except Exception as e:
         current_app.logger.error(f"Broadcast notify failed: {e}")
         flash('发送失败：数据库错误', 'danger')
-    finally:
-        if conn:
-            conn.close()
 
     return redirect(url_for('payment_bp.admin_notify'))
 
-
-# ------------------ Admin Points Management ------------------
-
 @payment_bp.route('/admin/points', methods=['GET'])
+@login_required
 def admin_points():
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
-    q = (request.args.get('q') or '').strip()
+    q = request.args.get('q', '').strip()
+    query = User.query.order_by(User.created_at.desc())
 
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor()
-        if q:
-            like = f"%{q}%"
-            cursor.execute(
-                "SELECT id, email, username, points, last_login_at, created_at FROM users WHERE email LIKE ? OR username LIKE ? ORDER BY created_at DESC",
-                (like, like)
-            )
-        else:
-            cursor.execute(
-                "SELECT id, email, username, points, last_login_at, created_at FROM users ORDER BY created_at DESC"
-            )
-        users = [dict(row) for row in cursor.fetchall()]
-    finally:
-        if conn:
-            conn.close()
+    if q:
+        like_pattern = f"%{q}%"
+        query = query.filter(db.or_(User.email.like(like_pattern), User.username.like(like_pattern)))
 
+    users = query.all()
     return render_template('admin/points.html', users=users, q=q)
 
-
 @payment_bp.route('/admin/points/grant', methods=['POST'])
+@login_required
 def admin_points_grant():
-    if session.get('is_admin') != 1:
+    if not current_user.is_admin:
         abort(403)
 
-    target = (request.form.get('target') or '').strip()  # 'all' | 'emails' | 'selected'
-    emails_raw = (request.form.get('emails') or '').strip()
-    selected_ids_raw = (request.form.get('selected_ids') or '').strip()
-    reason = (request.form.get('reason') or '').strip()
-    amount_raw = (request.form.get('amount') or '').strip()
-
     try:
-        amount = int(amount_raw)
-    except Exception:
+        amount = int(request.form.get('amount', '0').strip())
+    except ValueError:
         amount = 0
 
     if amount <= 0:
         flash('积分数量必须为正整数', 'warning')
         return redirect(url_for('payment_bp.admin_points'))
 
-    conn = get_db_connection()
+    reason = request.form.get('reason', '').strip()
+    target = request.form.get('target', 'selected').strip()
+    
+    user_ids = []
     try:
-        cursor = conn.cursor()
-        user_ids = []
         if target == 'all':
-            cursor.execute("SELECT id FROM users")
-            user_ids = [row['id'] for row in cursor.fetchall()]
+            user_ids = [user.id for user in User.query.all()]
         elif target == 'emails':
+            emails_raw = request.form.get('emails', '').strip()
             emails = [e.strip() for e in emails_raw.split(',') if e.strip()]
             if not emails:
                 flash('请填写至少一个邮箱', 'warning')
                 return redirect(url_for('payment_bp.admin_points'))
-            placeholders = ','.join(['?'] * len(emails))
-            cursor.execute(f"SELECT id FROM users WHERE email IN ({placeholders})", tuple(emails))
-            user_ids = [row['id'] for row in cursor.fetchall()]
+            users = User.query.filter(User.email.in_(emails)).all()
+            user_ids = [user.id for user in users]
             if not user_ids:
                 flash('未找到对应邮箱的用户', 'warning')
-                return redirect(url_for('payment_bp.admin_points'))
         elif target == 'selected':
-            try:
-                user_ids = [int(x) for x in selected_ids_raw.split(',') if x.strip()]
-            except Exception:
-                user_ids = []
-            if not user_ids:
-                flash('请选择至少一个用户', 'warning')
-                return redirect(url_for('payment_bp.admin_points'))
+            selected_ids_raw = request.form.get('selected_ids', '').strip()
+            user_ids = [int(x) for x in selected_ids_raw.split(',') if x.strip()]
         else:
             flash('无效的目标类型', 'danger')
-            return redirect(url_for('payment_bp.admin_points'))
+    except (ValueError, TypeError):
+        flash('无效的用户ID格式', 'danger')
+        return redirect(url_for('payment_bp.admin_points'))
 
-        # 批量加积分
-        placeholders = ','.join(['?'] * len(user_ids))
-        try:
-            cursor.execute(f"UPDATE users SET points = points + ? WHERE id IN ({placeholders})", tuple([amount] + user_ids))
-            conn.commit()
-        except sqlite3.Error as e:
-            current_app.logger.error(f"Grant points update failed: {e}")
-            flash('加积分失败：数据库错误', 'danger')
-            return redirect(url_for('payment_bp.admin_points'))
+    if not user_ids:
+        flash('未选择任何用户', 'warning')
+        return redirect(url_for('payment_bp.admin_points'))
 
-        # 发送通知
+    try:
+        User.query.filter(User.id.in_(user_ids)).update({'points': User.points + amount}, synchronize_session=False)
+        db.session.commit()
+
         sent = 0
         for uid in user_ids:
             try:
@@ -491,10 +402,11 @@ def admin_points_grant():
                 sent += 1
             except Exception as e:
                 current_app.logger.error(f"Grant points notify failed for {uid}: {e}")
-
+        
         flash(f'已为 {len(user_ids)} 位用户增加 {amount} 积分（通知成功 {sent}）', 'success')
-    finally:
-        if conn:
-            conn.close()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Grant points update failed: {e}")
+        flash('加积分失败：数据库错误', 'danger')
 
     return redirect(url_for('payment_bp.admin_points'))

@@ -1,5 +1,16 @@
 import { showLoading, hideLoading, showToast } from './utils.js';
 import { ENDPOINTS } from './constants.js';
+import { updateUserBar } from './auth.js';
+
+// Helper function to update user state
+function updateUserState(user) {
+    if (user && typeof user.points !== 'undefined') {
+        if (window.currentUser) {
+            window.currentUser.points = user.points;
+        }
+        updateUserBar(window.currentUser);
+    }
+}
 
 // This module centralizes all API calls to the backend.
 
@@ -169,6 +180,9 @@ export async function performMapSearch(searchTerm, source = 'amap') {
             throw new Error(data.message || `HTTP error! status: ${response.status}`);
         }
         // console.log(`地图搜索响应数据 (${source}):`, data);
+        if (data.user) {
+            updateUserState(data.user);
+        }
         return data;
     } catch (error) {
         console.error(`地图搜索错误 (${source}):`, error);
@@ -196,6 +210,9 @@ export async function autoSelectPoint(pois, originalAddress, sourceContext) {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || '自动选点请求失败');
+        if (data.user) {
+            updateUserState(data.user);
+        }
         return data;
     } catch (error) {
         console.error('自动选点失败:', error);
@@ -221,6 +238,9 @@ export async function performSmartSearch(query, mode = 'crawl_extract') {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '智能分析请求失败');
+        if (data.user) {
+            updateUserState(data.user);
+        }
         return data;
     } catch(error) {
         showToast('智能分析失败: ' + error.message, 'error');

@@ -1,5 +1,4 @@
-from flask import Blueprint, render_template, session, redirect, url_for, jsonify, request, send_file
-from ..routes.payment_bp import RECHARGE_PACKAGES
+from flask import Blueprint, render_template, session, redirect, url_for, jsonify, request, send_file, current_app
 from ..services import geocoding_apis
 from ..utils import address_processing
 from ..models import LocationType # Import SQLAlchemy model
@@ -23,7 +22,8 @@ main_bp = Blueprint('main', __name__)
 @main_bp.route('/')
 def index():
     """主页，直接渲染index.html，并传入充值套餐数据"""
-    return render_template('index.html', packages=RECHARGE_PACKAGES)
+    packages = current_app.config.get('RECHARGE_PACKAGES', {})
+    return render_template('index.html', packages=packages)
 
 @main_bp.route('/get_location_types', methods=['GET'])
 def get_location_types():

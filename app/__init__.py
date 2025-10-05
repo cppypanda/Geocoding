@@ -2,12 +2,16 @@ import os
 import logging
 from flask import Flask, request, jsonify, render_template, send_file, session, url_for
 from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
 from .config import config_by_name
 from zhipuai import ZhipuAI
 from .utils.log_context import ContextFilter
 
 # Initialize extensions
 db = SQLAlchemy()
+login_manager = LoginManager()
+# Redirect users to the main page to log in if they try to access a protected page
+login_manager.login_view = 'main.index'
 
 def create_app(config_name=None, config_overrides=None):
     if config_name is None:
@@ -31,6 +35,7 @@ def create_app(config_name=None, config_overrides=None):
 
     # Initialize extensions with the app
     db.init_app(app)
+    login_manager.init_app(app)
 
     if app.config.get('ZHIPUAI_KEY'):
         app.extensions['zhipuai_client'] = ZhipuAI(api_key=app.config['ZHIPUAI_KEY'])
@@ -41,6 +46,11 @@ def create_app(config_name=None, config_overrides=None):
         # This will create tables from your models if they don't exist
         from . import models
         db.create_all()
+
+        @login_manager.user_loader
+        def load_user(user_id):
+            return models.User.query.get(int(user_id))
+
         app.logger.info("SQLAlchemy tables created/verified.")
         app.logger.info("Flask application initialization complete.")
 
@@ -66,9 +76,16 @@ def create_app(config_name=None, config_overrides=None):
 
     @app.context_processor
     def inject_public_config():
+        points_award = app.config.get('POINTS_AWARD_BY_SERVICE', {})
+        min_award = min(v for k, v in points_award.items() if k != 'default' and v > 0) if any(v > 0 for k, v in points_award.items() if k != 'default') else 0
+        max_award = max(points_award.values()) if points_award else 0
+
         return {
             'TIANDITU_KEY': app.config.get('TIANDITU_KEY'),
             'AMAP_KEY': app.config.get('AMAP_KEY'),
+            'points_award_by_service': points_award,
+            'referral_award': app.config.get('REFERRAL_AWARD', {}),
+            'points_award_range': {'min': min_award, 'max': max_award}
         }
 
     return app

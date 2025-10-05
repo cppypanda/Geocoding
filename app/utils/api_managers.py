@@ -111,4 +111,4 @@ class APIRateLimiter:
         self.requests.append(time.time())
 
 # Global limiter instances
-baidu_limiter = APIRateLimiter(3) 
+baidu_limiter = APIRateLimiter(30) 

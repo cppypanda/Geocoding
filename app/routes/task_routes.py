@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify
-from flask import session
+from flask_login import login_required, current_user
 from app.services import task_service
-from app.utils.auth import login_required
 import datetime
 
 # 创建一个名为 'tasks' 的蓝图
@@ -19,8 +18,7 @@ def get_tasks():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 10, type=int)
     
-    # 从 session 获取当前登录用户的ID（与自定义 login_required 一致）
-    user_id = session.get('user_id')
+    user_id = current_user.id
     tasks = task_service.get_tasks_by_user(user_id, page, per_page)
     
     # 为了在 JSON 响应中正确显示日期，需要将其格式化为字符串
@@ -45,7 +43,7 @@ def create_task():
     result_data = data['result_data']
     if not isinstance(task_name, str) or not task_name.strip():
         return jsonify({"error": "任务名称无效"}), 400
-    user_id = session.get('user_id')
+    user_id = current_user.id
     
     try:
         task_id = task_service.create_task(user_id, task_name.strip(), result_data)
@@ -63,7 +61,7 @@ def get_task_detail(task_id):
     """
     获取单个任务的详细信息。
     """
-    user_id = session.get('user_id')
+    user_id = current_user.id
     task = task_service.get_task_by_id(task_id, user_id)
     
     if task:
@@ -88,7 +86,7 @@ def update_task(task_id):
         return jsonify({"error": "请求体中缺少 'result_data' 字段"}), 400
 
     new_result_data = data['result_data']
-    user_id = session.get('user_id')
+    user_id = current_user.id
     
     rows_affected = task_service.update_task(task_id, user_id, new_result_data)
     
@@ -103,7 +101,7 @@ def delete_task(task_id):
     """
     删除一个任务。
     """
-    user_id = session.get('user_id')
+    user_id = current_user.id
     rows_affected = task_service.delete_task(task_id, user_id)
     
     if rows_affected > 0:
