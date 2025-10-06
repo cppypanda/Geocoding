@@ -12,6 +12,46 @@ function updateUsernameCharCount() {
 }
 
 /**
+ * 异步更新“分享推荐”卡片中的信息
+ */
+async function updateReferralCardInfo() {
+    const codeText = document.getElementById('referralCodeText');
+    const linkInput = document.getElementById('referralLinkInput');
+    const statsText = document.getElementById('referralStatsText');
+
+    if (!codeText || !linkInput) return;
+
+    try {
+        const resp = await fetch(ENDPOINTS.referralInfo);
+        if (resp.status === 401) { // Not logged in
+            codeText.textContent = '--';
+            linkInput.value = '';
+            if (statsText) statsText.textContent = '登录后可见';
+            return;
+        }
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            codeText.textContent = '加载失败';
+            linkInput.value = '';
+            if (statsText) statsText.textContent = '';
+            return;
+        }
+        codeText.textContent = data.referral_code || '--';
+        linkInput.value = data.share_link || '';
+        if (statsText && data.stats) {
+            const n = Number(data.stats.total_invitees || 0);
+            statsText.textContent = `已成功邀请 ${n} 人`;
+        } else {
+            if (statsText) statsText.textContent = '已成功邀请 0 人';
+        }
+    } catch (e) {
+        if (codeText) codeText.textContent = '网络错误';
+        if (linkInput) linkInput.value = '';
+        if (statsText) statsText.textContent = '';
+    }
+}
+
+/**
  * Updates the user bar UI based on login status.
  * @param {object|null} user - The user object, or null if logged out.
  */
@@ -21,6 +61,7 @@ export function updateUserBar(user = null) {
     const usernameDisplay = document.getElementById('username-display');
     const userPointsDisplay = document.getElementById('user-points');
     const settingsEmailInput = document.getElementById('settingsEmail');
+    const settingsUsernameInput = document.getElementById('settingsUsername');
 
     const existingAdminBtn = document.getElementById('admin-panel-btn');
     if (existingAdminBtn) {
@@ -37,8 +78,9 @@ export function updateUserBar(user = null) {
         usernameDisplay.textContent = user.username || user.email.split('@')[0];
         userPointsDisplay.textContent = user.points !== undefined ? user.points : 0;
         if(settingsEmailInput) settingsEmailInput.value = user.email;
+        if(settingsUsernameInput) settingsUsernameInput.value = user.username || '';
 
-        if (user.is_admin === 1) {
+        if (user.is_admin) {
             const adminBtn = createAndAppendElement('a', {
                 href: '/admin/orders',
                 className: 'btn btn-outline-danger btn-sm me-2',
@@ -51,7 +93,10 @@ export function updateUserBar(user = null) {
         userUnsignedDiv.classList.remove('d-none');
         userSignedDiv.classList.add('d-none');
         if(settingsEmailInput) settingsEmailInput.value = '';
+        if(settingsUsernameInput) settingsUsernameInput.value = '';
     }
+    // 更新推荐信息
+    updateReferralCardInfo();
 }
 
 /**
@@ -382,8 +427,10 @@ export function initializeAuthForms() {
     const forgotPasswordModalEl = document.getElementById('forgotPasswordModal');
 
     if (loginRegisterModalEl) {
-        const loginRegisterModal = new bootstrap.Modal(loginRegisterModalEl);
-        
+        // REMOVED: const loginRegisterModal = new bootstrap.Modal(loginRegisterModalEl);
+        // This was creating a new instance which might not be the one being displayed.
+        // We will now get the instance on-demand inside the event listener.
+
         const go_to_register_handler = (e) => {
             e.preventDefault();
             document.getElementById('loginRegisterTabContent').classList.add('d-none');
@@ -397,7 +444,6 @@ export function initializeAuthForms() {
             e.preventDefault();
             document.getElementById('loginRegisterTabContent').classList.remove('d-none');
             document.getElementById('register-set-password-pane').classList.add('d-none');
-            // Manually show the first tab (account login) to re-initialize the component
             const firstTabEl = document.querySelector('#loginRegisterTabs button[data-bs-target="#account-login-pane"]');
             if(firstTabEl) {
                 const firstTab = new bootstrap.Tab(firstTabEl);
@@ -407,19 +453,33 @@ export function initializeAuthForms() {
         
         forgotPasswordLink?.addEventListener('click', (e) => {
             e.preventDefault();
-            const forgotPasswordModal = new bootstrap.Modal(forgotPasswordModalEl);
-            loginRegisterModal.hide();
-            forgotPasswordModal.show();
+            if (!forgotPasswordModalEl || !loginRegisterModalEl) return;
+            
+            const loginModal = bootstrap.Modal.getOrCreateInstance(loginRegisterModalEl);
+            const forgotPasswordModal = bootstrap.Modal.getOrCreateInstance(forgotPasswordModalEl);
+
+            loginRegisterModalEl.addEventListener('hidden.bs.modal', () => {
+                forgotPasswordModal.show();
+            }, { once: true });
+            
+            loginModal.hide();
         });
     }
 
     if (forgotPasswordModalEl) {
-        const forgotPasswordModal = new bootstrap.Modal(forgotPasswordModalEl);
+        // const forgotPasswordModal = new bootstrap.Modal(forgotPasswordModalEl);
         backToLoginFromForgotLink?.addEventListener('click', (e) => {
             e.preventDefault();
-            const loginRegisterModal = new bootstrap.Modal(loginRegisterModalEl);
+            if (!loginRegisterModalEl || !forgotPasswordModalEl) return;
+
+            const loginRegisterModal = bootstrap.Modal.getOrCreateInstance(loginRegisterModalEl);
+            const forgotPasswordModal = bootstrap.Modal.getOrCreateInstance(forgotPasswordModalEl);
+
+            forgotPasswordModalEl.addEventListener('hidden.bs.modal', () => {
+                loginRegisterModal.show();
+            }, { once: true });
+
             forgotPasswordModal.hide();
-            loginRegisterModal.show();
         });
     }
 
@@ -657,21 +717,8 @@ function initializeReferralCard() {
 
     if (!codeText || !linkInput) return;
 
-    // 加载用户推荐信息
-    (async () => {
-        try {
-            const resp = await fetch(ENDPOINTS.referralInfo);
-            if (resp.status === 401) return; // 未登录则不处理
-            const data = await resp.json();
-            if (!resp.ok || !data.success) return;
-            codeText.textContent = data.referral_code || '--';
-            linkInput.value = data.share_link || '';
-            if (statsText && data.stats) {
-                const n = Number(data.stats.total_invitees || 0);
-                statsText.textContent = `已成功邀请 ${n} 人`;
-            }
-        } catch (e) {}
-    })();
+    // `updateReferralCardInfo` will be called by `updateUserBar` on page load.
+    // This function now only needs to set up event listeners.
 
     // 通用复制方法（带回退）
     async function copyTextWithFallback(text, fallbackElement) {

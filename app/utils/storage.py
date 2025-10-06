@@ -62,9 +62,16 @@ def upload_file_to_r2(file_storage, folder='feedback'):
             ExtraArgs={'ContentType': file_storage.content_type}
         )
         
-        # Ensure the base URL doesn't have a trailing slash
+        # --- URL拼接健壮性修复 ---
+        # 确保基础URL的末尾没有斜杠
         if public_url_base.endswith('/'):
             public_url_base = public_url_base[:-1]
+        
+        # 检查基础URL是否已经包含了bucket名作为路径的一部分
+        # (例如: https://<...>.r2.dev/my-bucket-name)
+        # 如果是，则不再拼接bucket名，避免出现 /my-bucket-name/my-bucket-name/... 的错误
+        if public_url_base.endswith(f'/{bucket_name}'):
+             public_url_base = public_url_base[:-(len(bucket_name) + 1)]
 
         file_url = f"{public_url_base}/{object_name}"
         current_app.logger.info(f"Successfully uploaded {file_storage.filename} to {file_url}")

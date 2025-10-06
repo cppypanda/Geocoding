@@ -1,8 +1,11 @@
 from flask import Blueprint, render_template, session, redirect, url_for, jsonify, request, send_file, current_app
+from flask_login import current_user
 from ..services import geocoding_apis
 from ..utils import address_processing
 from ..models import LocationType # Import SQLAlchemy model
 from .. import db # Import db instance
+from ..utils.auth import login_required
+from ..routes.geocoding import get_points_cost, deduct_points
 import json
 import jionlp as jio
 import asyncio
@@ -16,6 +19,7 @@ import os
 import zipfile
 from datetime import datetime
 import tempfile
+from ..services import user_service
 
 main_bp = Blueprint('main', __name__)
 
@@ -105,6 +109,7 @@ def jionlp_autocomplete():
         return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 @main_bp.route('/export', methods=['POST'])
+@login_required
 def export_data():
     """导出数据为不同格式"""
     try:
@@ -116,7 +121,27 @@ def export_data():
         if not results:
             return jsonify({'error': '没有可导出的数据'}), 400
 
+        # --- 积分扣除逻辑 ---
+        user_id = current_user.id
+        task_name = f"export_{export_format}"
+        
+        # 导出功能不区分用户Key优惠，统一标准价
+        points_to_deduct = get_points_cost(task_name, used_user_key=False)
+
+        if points_to_deduct > 0:
+            if current_user.points < points_to_deduct:
+                return jsonify({
+                    'error': f'积分不足，导出需要 {points_to_deduct} 积分，您当前拥有 {current_user.points} 积分。'
+                }), 402 # HTTP 402 Payment Required
+            
+            deduct_points(user_id, points_to_deduct)
+            current_app.logger.info(f"计费：用户 {user_id} 导出 {export_format.upper()} 文件扣除 {points_to_deduct} 积分。")
+
         df = pd.DataFrame(results)
+
+        # 获取最新的用户积分
+        updated_user = user_service.get_user_by_id(user_id)
+        updated_points = updated_user.points if updated_user else current_user.points
 
         if export_format == 'xlsx':
             # 导出为 Excel
@@ -124,12 +149,14 @@ def export_data():
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, sheet_name='results')
             output.seek(0)
-            return send_file(
+            response = send_file(
                 output,
                 mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 as_attachment=True,
                 download_name=f'{location_name}.xlsx'
             )
+            response.headers['X-Updated-User-Points'] = str(updated_points)
+            return response
 
         if export_format == 'kml':
             # 导出为 KML（需提供 WGS84 坐标 lng/lat）
@@ -180,12 +207,14 @@ def export_data():
             kml_bytes = kml.kml().encode('utf-8')
             output = io.BytesIO(kml_bytes)
             output.seek(0)
-            return send_file(
+            response = send_file(
                 output,
                 mimetype='application/vnd.google-earth.kml+xml',
                 as_attachment=True,
                 download_name=f'{location_name}.kml'
             )
+            response.headers['X-Updated-User-Points'] = str(updated_points)
+            return response
 
         if export_format == 'shp':
             if 'lng' not in df.columns or 'lat' not in df.columns:
@@ -213,12 +242,14 @@ def export_data():
                             zf.write(fpath, arcname=f'{location_name}.{ext}')
 
                 zip_buffer.seek(0)
-                return send_file(
+                response = send_file(
                     zip_buffer,
                     mimetype='application/zip',
                     as_attachment=True,
                     download_name=f'{location_name}.zip'
                 )
+                response.headers['X-Updated-User-Points'] = str(updated_points)
+                return response
 
         # 其他不支持的格式
         else:

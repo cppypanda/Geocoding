@@ -670,10 +670,10 @@
                             <h6 class="mb-3">2. 请选择支付方式</h6>
                             <div class="d-flex gap-3 mb-3" id="paymentMethodList">
                                 <button type="button" class="btn btn-outline-primary payment-method-btn flex-fill" data-method="alipay" disabled>
-                                    <img src="{{ url_for('static', filename='images/alipay_logo.svg') }}" alt="Alipay" style="height: 24px; margin-right: 8px;">支付宝
+                                    <img src="{{ url_for('static', filename='images/alipay_logo.png') }}" alt="Alipay" style="height: 24px; margin-right: 8px;">支付宝
                                 </button>
                                 <button type="button" class="btn btn-outline-success payment-method-btn flex-fill" data-method="wechat" disabled>
-                                    <img src="{{ url_for('static', filename='images/wechat_logo.svg') }}" alt="WeChat Pay" style="height: 24px; margin-right: 8px;">微信支付
+                                    <img src="{{ url_for('static', filename='images/wechat_logo.png') }}" alt="WeChat Pay" style="height: 24px; margin-right: 8px;">微信支付
                                 </button>
                             </div>
                             <div class="form-check text-start">
@@ -687,10 +687,21 @@
                         <div class="col-md-5">
                             <h6 class="text-center mb-2">3. 确认支付</h6>
                             <div class="qr-code-wrapper d-flex align-items-center justify-content-center" style="position: relative; min-height: 240px; background-color: #f8f9fa; border-radius: 15px;">
-                                <div id="payment-info-area" class="text-center p-3">
+                                <!-- 支付宝支付信息 -->
+                                <div id="alipay-info-area" class="text-center p-3">
                                     <i class="bi bi-credit-card-2-front text-primary" style="font-size: 4rem;"></i>
-                                    <p class="mt-3 mb-1">应付金额: <strong id="amountToPay" class="text-danger">0.00</strong> 元</p>
-                                    <p class="text-muted small">选择套餐和支付方式后，点击下方按钮将跳转至支付宝官方页面完成支付。</p>
+                                    <p class="mt-3 mb-1">应付金额: <strong id="amountToPayAlipay" class="text-danger">0.00</strong> 元</p>
+                                    <p class="text-muted small">选择套餐后，点击下方按钮将跳转至支付宝官方页面完成支付。</p>
+                                </div>
+                                <!-- 微信支付二维码 -->
+                                <div id="wechat-qr-area" class="text-center p-3" style="display: none;">
+                                    <img alt="微信支付二维码" id="paymentQrCode" style="width:160px; height:160px; border-radius: 8px; margin-bottom: 10px;">
+                                    <p class="mb-1 small">需支付: <strong id="amountToPayWechat" class="text-danger"></strong> 元</p>
+                                    <div class="input-group input-group-sm">
+                                        <input type="text" id="orderNumberDisplay" class="form-control" placeholder="订单号" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" id="copyOrderNumberBtn" title="复制订单号"><i class="bi bi-clipboard"></i></button>
+                                    </div>
+                                    <p class="small text-primary mt-1" style="font-size: 0.75rem;">支付时请务必备注订单号</p>
                                 </div>
                             </div>
                         </div>
@@ -699,6 +710,7 @@
                 <div class="modal-footer border-0">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary" id="initiateAlipayBtn" disabled><i class="bi bi-shield-check"></i> 前往支付宝安全支付</button>
+                    <button type="button" class="btn btn-success" id="confirmWechatPaymentBtn" style="display: none;" disabled><i class="bi bi-check-circle"></i> 我已完成支付 (微信)</button>
                 </div>
             </div>
         </div>
@@ -785,9 +797,9 @@
                                         <h6 class="mb-0">社交媒体传播</h6>
                                         <span class="badge bg-warning text-dark ms-2">加分按效果评估</span>
                                     </div>
-                                    <p class="small text-muted mb-2">在微信公众号、朋友圈、专业群、小红书等平台发布推广内容，并上传截图（含粉丝量、浏览/收藏量等）通过意见反馈提交，作者将根据传播效果给予额外积分。</p>
+                                    <p class="small text-muted mb-2">在微信公众号、朋友圈、专业群、小红书等平台发布推广内容，并上传截图（含粉丝量、浏览/收藏量等）通过意见反馈提交，一经采纳将有丰厚的积分回馈。</p>
                                     <div class="mb-2">
-                                        <textarea class="form-control" id="socialShareCopyText" rows="3" placeholder="点击"生成文案"自动生成可复制的宣传文案"></textarea>
+                                        <textarea class="form-control" id="socialShareCopyText" rows="3" placeholder='点击"生成文案"按钮，将为您智能生成引人注目的推广文案'></textarea>
                                     </div>
                                     <div class="d-flex gap-2">
                                         <button type="button" class="btn btn-outline-primary btn-sm" id="generateSocialCopyBtn"><i class="bi bi-stars"></i> 生成文案</button>

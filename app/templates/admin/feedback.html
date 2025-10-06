@@ -38,15 +38,16 @@
                     <span class="badge {% if item.status=='new' %}bg-secondary{% elif item.status=='in_progress' %}bg-info{% elif item.status=='resolved' %}bg-success{% else %}bg-dark{% endif %}">{{ item.status or 'new' }}</span>
                 </div>
                 <div class="mb-2">
-                    <div class="fw-bold">来自：{{ item.username or '未设置用户名' }}</div>
-                    <div class="text-muted small"><i class="bi bi-envelope me-1"></i> {{ item.email }}</div>
+                    <div class="fw-bold">来自：{{ item.user.username or '未设置用户名' }}</div>
+                    <div class="text-muted small"><i class="bi bi-envelope me-1"></i> {{ item.user.email }}</div>
                 </div>
                 <p class="mb-2" style="white-space: pre-wrap;">{{ item.description }}</p>
                 {% if item.image_paths and item.image_paths|length > 0 %}
                 <div class="d-flex flex-wrap gap-2 mb-2">
-                    {% for img in item.image_paths %}
-                    <a href="{{ img }}" target="_blank">
-                        <img src="{{ img }}" alt="反馈图片" style="max-width: 120px; max-height: 120px; border-radius: 12px;"/>
+                    {% for img_path in item.image_paths %}
+                    {% set img_url = img_path if img_path.startswith('http') else url_for('static', filename=img_path) %}
+                    <a href="{{ img_url }}" target="_blank">
+                        <img src="{{ img_url }}" alt="反馈图片" style="max-width: 120px; max-height: 120px; border-radius: 12px;"/>
                     </a>
                     {% endfor %}
                 </div>
@@ -68,6 +69,9 @@
                 <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
                     <input type="hidden" name="status" value="archived"/>
                     <button type="submit" class="btn btn-sm btn-outline-dark">归档</button>
+                </form>
+                <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_delete', feedback_id=item.id) }}" onsubmit="return confirm('确定要删除这条反馈吗？');">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
                 </form>
                 <form class="d-inline float-end" method="post" action="{{ url_for('payment_bp.admin_feedback_reply', feedback_id=item.id) }}">
                     <div class="input-group input-group-sm" style="max-width: 420px;">

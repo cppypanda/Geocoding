@@ -15,6 +15,23 @@ from ..models import User # Import User model
 
 auth_bp = Blueprint('auth', __name__) # 移除 url_prefix
 
+def _check_and_sync_admin_status(user):
+    """
+    根据配置文件检查用户是否应为管理员，并在必要时更新数据库。
+    """
+    if not user or not user.email:
+        return
+
+    admin_emails = current_app.config.get('ADMIN_EMAILS', [])
+    should_be_admin = user.email in admin_emails
+
+    if user.is_admin != should_be_admin:
+        # 这里我们直接修改user对象，让后续的用户信息返回更新后的状态
+        user.is_admin = should_be_admin
+        # 调用服务层函数来更新数据库
+        user_service.update_admin_status(user, should_be_admin)
+        current_app.logger.info(f"Admin status for {user.email} synchronized to {should_be_admin}.")
+
 # This cache is for temporary verification codes and does not need to be in the database.
 verification_codes_cache = {}
 # 兼容旧代码/测试中使用的名称（例如 sms_codes_cache）
@@ -51,8 +68,15 @@ def send_verification_code():
     
     # 发送邮件
     try:
+        purpose_map = {
+            'register_login': '注册或登录',
+            'reset_password': '重置密码',
+            'register_or_set_password': '注册或设置密码'
+        }
+        purpose_text = purpose_map.get(purpose, purpose)
+
         subject = f"您的验证码是: {code}"
-        body = f"您正在进行 {purpose} 操作，验证码为：<h1>{code}</h1>此验证码5分钟内有效。"
+        body = f"您正在进行{purpose_text}操作，验证码为：<h1>{code}</h1>此验证码5分钟内有效。"
         email_service.send_email(email, subject, body)
     except Exception as e:
         current_app.logger.error(f"发送验证码邮件失败: {e}")
@@ -99,6 +123,7 @@ def login_register_email():
 
     login_user(user, remember=True)
     user_service.update_user_last_login(user.id)
+    _check_and_sync_admin_status(user)
     
     user_info = {
         'id': user.id,
@@ -213,6 +238,7 @@ def login_account():
     if user:
         login_user(user, remember=True)
         user_service.update_user_last_login(user.id)
+        _check_and_sync_admin_status(user)
 
         user_info = {
             'id': user.id,

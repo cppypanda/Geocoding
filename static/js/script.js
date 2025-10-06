@@ -144,17 +144,28 @@ function initializeButtons() {
     // 充值流程DOM
     const rechargePackageList = document.getElementById('rechargePackageList');
     const paymentMethodList = document.getElementById('paymentMethodList');
-    const amountToPayEl = document.getElementById('amountToPay');
+    const amountToPayAlipay = document.getElementById('amountToPayAlipay');
+    const amountToPayWechat = document.getElementById('amountToPayWechat');
     const agreeRechargeTerms = document.getElementById('agreeRechargeTerms');
     const initiateAlipayBtn = document.getElementById('initiateAlipayBtn');
+    const confirmWechatPaymentBtn = document.getElementById('confirmWechatPaymentBtn');
+
+    // 微信支付相关DOM
+    const alipayInfoArea = document.getElementById('alipay-info-area');
+    const wechatQrArea = document.getElementById('wechat-qr-area');
+    const paymentQrCode = document.getElementById('paymentQrCode');
+    const orderNumberDisplay = document.getElementById('orderNumberDisplay');
+    const copyOrderNumberBtn = document.getElementById('copyOrderNumberBtn');
 
     // 充值流程状态
     let selectedPackageId = null;
     let selectedPaymentMethod = null; // 'alipay' | 'wechat'
+    let wechatOrder = null; // 存储微信支付创建的订单
 
     function resetRechargeFlow() {
         selectedPackageId = null;
         selectedPaymentMethod = null;
+        wechatOrder = null;
         // 视觉重置
         if (rechargePackageList) {
             rechargePackageList.querySelectorAll('.recharge-package-card').forEach(card => card.classList.remove('selected'));
@@ -165,14 +176,24 @@ function initializeButtons() {
                 btn.disabled = true;
             });
         }
-        if (amountToPayEl) amountToPayEl.textContent = '0.00';
-        updateInitiatePaymentBtnState();
+        if (amountToPayAlipay) amountToPayAlipay.textContent = '0.00';
+        if (amountToPayWechat) amountToPayWechat.textContent = '0.00';
+        if (orderNumberDisplay) orderNumberDisplay.value = '';
+
+        // UI 切换
+        if (alipayInfoArea) alipayInfoArea.style.display = 'block';
+        if (wechatQrArea) wechatQrArea.style.display = 'none';
+        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'inline-block';
+        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'none';
+
+        updatePaymentButtonStates();
     }
 
-    function updateInitiatePaymentBtnState() {
+    function updatePaymentButtonStates() {
         const termsOk = !!(agreeRechargeTerms && agreeRechargeTerms.checked);
         const ready = !!(selectedPackageId && selectedPaymentMethod);
         if (initiateAlipayBtn) initiateAlipayBtn.disabled = !(termsOk && ready);
+        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.disabled = !(termsOk && ready);
     }
 
     // 当打开充值模态时，重置流程
@@ -203,19 +224,20 @@ function initializeButtons() {
             rechargePackageList.querySelectorAll('.recharge-package-card').forEach(el => el.classList.remove('selected'));
             card.classList.add('selected');
             selectedPackageId = card.getAttribute('data-package-id');
+            wechatOrder = null; // 套餐变更，清除已创建的微信订单
             // 选择套餐后，启用支付方式按钮
             if (paymentMethodList) {
                 paymentMethodList.querySelectorAll('.payment-method-btn').forEach(btn => btn.disabled = false);
             }
-            // 如果支付方式已选，则更新价格
+            // 如果支付方式已选，则更新价格和UI
             if(selectedPaymentMethod) {
-                updatePriceDisplay();
+                updatePriceAndUIVisibility();
             }
-            updateInitiatePaymentBtnState();
+            updatePaymentButtonStates();
         });
     }
 
-    function updatePriceDisplay() {
+    function updatePriceAndUIVisibility() {
         let priceText = '';
         try {
             const selectedCard = rechargePackageList && rechargePackageList.querySelector('.recharge-package-card.selected');
@@ -226,7 +248,24 @@ function initializeButtons() {
         } catch (e) {}
         const match = priceText.match(/([0-9]+(?:\.[0-9]{1,2})?)/);
         const parsedAmount = match ? parseFloat(match[1]).toFixed(2) : '0.00';
-        if (amountToPayEl) amountToPayEl.textContent = parsedAmount;
+        
+        if (selectedPaymentMethod === 'alipay') {
+            if (amountToPayAlipay) amountToPayAlipay.textContent = parsedAmount;
+            if (alipayInfoArea) alipayInfoArea.style.display = 'block';
+            if (wechatQrArea) wechatQrArea.style.display = 'none';
+            if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'inline-block';
+            if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'none';
+        } else if (selectedPaymentMethod === 'wechat') {
+            const amountForQr = parsedAmount ? (Number(parsedAmount)).toString() : '';
+            if (amountToPayWechat) amountToPayWechat.textContent = parsedAmount;
+            if (alipayInfoArea) alipayInfoArea.style.display = 'none';
+            if (wechatQrArea) wechatQrArea.style.display = 'block';
+            if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
+            if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'inline-block';
+            setQrImageFor('wechat', amountForQr);
+            // 为微信支付提前创建订单以显示订单号
+            createRechargeOrderIfNeeded();
+        }
     }
 
     // 支付方式选择
@@ -245,14 +284,77 @@ function initializeButtons() {
                 return;
             }
 
-            updatePriceDisplay();
-            updateInitiatePaymentBtnState();
+            updatePriceAndUIVisibility();
+            updatePaymentButtonStates();
         });
+    }
+
+    function setQrImageFor(method, amount) {
+        if (!paymentQrCode) return;
+        const basePath = '/static/images/payment';
+        // 根据支付方式确定文件扩展名
+        const extension = method === 'wechat' ? 'jpg' : 'png';
+        const fileName = amount ? `${amount}.${extension}` : '';
+        const src = `${basePath}/${method}/${fileName}`;
+        paymentQrCode.src = src;
     }
 
     // 协议勾选控制
     if (agreeRechargeTerms) {
-        agreeRechargeTerms.addEventListener('change', updateInitiatePaymentBtnState);
+        agreeRechargeTerms.addEventListener('change', updatePaymentButtonStates);
+    }
+    
+    // 复制订单号
+    if (copyOrderNumberBtn && orderNumberDisplay) {
+        copyOrderNumberBtn.addEventListener('click', async () => {
+            if (!orderNumberDisplay.value) {
+                showToast('无可复制的订单号', 'warning');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(orderNumberDisplay.value);
+                showToast('订单号已复制', 'success');
+            } catch (e) {
+                orderNumberDisplay.select();
+                document.execCommand && document.execCommand('copy');
+                showToast('已尝试复制订单号', 'info');
+            }
+        });
+    }
+
+    async function createRechargeOrderIfNeeded() {
+        if (wechatOrder) return wechatOrder; // 如果已为微信创建订单，直接返回
+        if (!selectedPackageId) return null;
+        try {
+            const resp = await fetch('/create_recharge_order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ package_id: selectedPackageId })
+            });
+            if (resp.status === 401) {
+                showToast('请先登录后再充值', 'warning');
+                const loginModalElement = document.getElementById('loginRegisterModal');
+                if (loginModalElement) {
+                    new bootstrap.Modal(loginModalElement).show();
+                }
+                return null;
+            }
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showToast(data.message || '创建订单失败', 'danger');
+                return null;
+            }
+            const order = { order_number: data.order_number, amount: data.amount };
+            if (selectedPaymentMethod === 'wechat') {
+                wechatOrder = order; // 缓存微信订单
+                // 创建成功后立即显示订单号
+                if (orderNumberDisplay) orderNumberDisplay.value = order.order_number;
+            }
+            return order;
+        } catch (err) {
+            showToast('网络异常，创建订单失败', 'danger');
+            return null;
+        }
     }
 
     // 前往支付宝支付
@@ -272,25 +374,9 @@ function initializeButtons() {
 
             try {
                 // 1. 创建订单
-                const orderResp = await fetch('/create_recharge_order', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ package_id: selectedPackageId })
-                });
-
-                if (orderResp.status === 401) {
-                    showToast('请先登录后再充值', 'warning');
-                    const loginModalElement = document.getElementById('loginRegisterModal');
-                    if (loginModalElement) {
-                        const loginModal = new bootstrap.Modal(loginModalElement);
-                        loginModal.show();
-                    }
-                    throw new Error('User not logged in');
-                }
-
-                const orderData = await orderResp.json();
-                if (!orderResp.ok || !orderData.success) {
-                    throw new Error(orderData.message || '创建订单失败');
+                const order = await createRechargeOrderIfNeeded();
+                if (!order) {
+                    throw new Error('创建订单失败');
                 }
                 
                 initiateAlipayBtn.innerHTML = '<i class="bi bi-shield-lock"></i> 正在生成安全支付链接...';
@@ -299,7 +385,7 @@ function initializeButtons() {
                 const paymentResp = await fetch('/initiate_payment', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ order_number: orderData.order_number })
+                    body: JSON.stringify({ order_number: order.order_number })
                 });
                 const paymentData = await paymentResp.json();
                 if (!paymentResp.ok || !paymentData.success) {
@@ -315,6 +401,29 @@ function initializeButtons() {
                 initiateAlipayBtn.disabled = false;
                 initiateAlipayBtn.innerHTML = '<i class="bi bi-shield-check"></i> 前往支付宝安全支付';
             }
+        });
+    }
+
+    // 确认微信支付（手动）
+    if (confirmWechatPaymentBtn) {
+        confirmWechatPaymentBtn.addEventListener('click', async () => {
+            if (!selectedPackageId || selectedPaymentMethod !== 'wechat' || !wechatOrder) {
+                showToast('请先选择套餐并生成订单', 'warning');
+                return;
+            }
+            
+            showToast('已记录您的支付意向，请等待管理员后台确认到账后为您发放积分。', 'info');
+            
+            // 关闭模态
+            try {
+                const el = document.getElementById('rechargeModal');
+                if (el) {
+                    const modal = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
+                    modal.hide();
+                }
+            } catch (e) {}
+
+            // 按钮状态在模态框关闭后由 resetRechargeFlow 重置
         });
     }
     
@@ -831,7 +940,15 @@ function initializeButtons() {
             const safeName = locationNameRaw.replace(/[\\/:*?"<>|]+/g, '_');
 
             // 发送请求
-            const blob = await exportData(selectedExportFormat, data, safeName);
+            const { blob, points } = await exportData(selectedExportFormat, data, safeName);
+            
+            // 如果返回了新的积分，则更新UI
+            if (points !== null && !isNaN(points)) {
+                if (window.currentUser) {
+                    window.currentUser.points = points;
+                }
+                updateUserBar({ ...window.currentUser, points: points });
+            }
 
             // 生成文件名
             const extMap = { xlsx: 'xlsx', kml: 'kml', shp: 'zip' };

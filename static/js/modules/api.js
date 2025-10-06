@@ -149,7 +149,13 @@ export async function exportData(format, data, locationName) {
             const errorData = await response.json().catch(() => ({ error: '服务器返回了无效的错误信息' }));
             throw new Error(errorData.error || `导出 ${format.toUpperCase()} 文件失败`);
         }
-        return await response.blob();
+        const blob = await response.blob();
+        const updatedPoints = response.headers.get('X-Updated-User-Points');
+        
+        return {
+            blob: blob,
+            points: updatedPoints !== null ? parseInt(updatedPoints, 10) : null
+        };
     } catch (error) {
         console.error('导出失败:', error);
         throw error; // Re-throw to be caught by the calling function

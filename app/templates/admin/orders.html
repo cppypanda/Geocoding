@@ -29,8 +29,8 @@
                         <tr>
                             <td><code>{{ order.order_number }}</code></td>
                             <td>
-                                <div><i class="bi bi-person-circle me-1"></i> {{ order.username or '未设置用户名' }}</div>
-                                <div class="small text-muted"><i class="bi bi-envelope me-1"></i> {{ order.email }}</div>
+                                <div><i class="bi bi-person-circle me-1"></i> {{ order.user.username or '未设置用户名' }}</div>
+                                <div class="small text-muted"><i class="bi bi-envelope me-1"></i> {{ order.user.email }}</div>
                             </td>
                             <td>{{ order.package_name }}</td>
                             <td>¥{{ "%.2f"|format(order.amount) }}</td>
@@ -67,8 +67,8 @@
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">用户信息</h6>
                 <p class="card-text">
-                    <i class="bi bi-person-circle me-1"></i> {{ order.username or '未设置用户名' }}<br>
-                    <i class="bi bi-telephone-fill me-1"></i> {{ order.phone_number }}
+                    <i class="bi bi-person-circle me-1"></i> {{ order.user.username or '未设置用户名' }}<br>
+                    <i class="bi bi-envelope me-1"></i> {{ order.user.email }}
                 </p>
                 <h6 class="card-subtitle mt-3 mb-2 text-muted">订单详情</h6>
                 <ul class="list-group list-group-flush">

@@ -1,4 +1,5 @@
 import uuid
+import json
 from flask import Blueprint, request, jsonify, current_app, render_template, abort, flash, redirect, url_for
 from flask_login import login_required, current_user
 from datetime import datetime
@@ -224,6 +225,23 @@ def admin_feedback_list():
         query = query.filter(Feedback.status == status_filter)
 
     feedback_list = query.all()
+    
+    for item in feedback_list:
+        if item.image_paths:
+            try:
+                # Assuming it's a JSON string of a list
+                parsed_paths = json.loads(item.image_paths)
+                if isinstance(parsed_paths, list):
+                    item.image_paths = parsed_paths
+                else:
+                    # If it's not a list, wrap it in a list
+                    item.image_paths = [str(parsed_paths)]
+            except json.JSONDecodeError:
+                # If it's not a valid JSON, treat it as a single path string
+                item.image_paths = [item.image_paths]
+        else:
+            item.image_paths = []
+
     return render_template('admin/feedback.html', feedback=feedback_list, status_filter=status_filter)
 
 @payment_bp.route('/admin/feedback/<int:feedback_id>/status', methods=['POST'])
@@ -281,6 +299,27 @@ def admin_feedback_reply(feedback_id: int):
         current_app.logger.error(f"Error replying feedback {feedback_id}: {e}")
         flash('发送消息失败：数据库错误', 'danger')
 
+    return redirect(url_for('payment_bp.admin_feedback_list'))
+
+@payment_bp.route('/admin/feedback/<int:feedback_id>/delete', methods=['POST'])
+@login_required
+def admin_feedback_delete(feedback_id: int):
+    if not current_user.is_admin:
+        abort(403)
+        
+    try:
+        feedback_item = Feedback.query.get(feedback_id)
+        if not feedback_item:
+            flash('反馈不存在或已被删除', 'warning')
+        else:
+            db.session.delete(feedback_item)
+            db.session.commit()
+            flash('反馈已成功删除', 'success')
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error deleting feedback {feedback_id}: {e}")
+        flash('删除反馈时发生数据库错误', 'danger')
+        
     return redirect(url_for('payment_bp.admin_feedback_list'))
 
 @payment_bp.route('/admin/notify', methods=['GET', 'POST'])

@@ -153,4 +153,13 @@ def update_user_api_key_in_users_table(user_id, service_name, api_key):
             db.session.commit()
         except Exception as e:
             db.session.rollback()
-            current_app.logger.error(f"Error updating user API key for {column_name}: {e}") 
+            current_app.logger.error(f"Error updating user API key for {column_name}: {e}")
+
+def update_admin_status(user, is_admin):
+    """Updates the is_admin status for a user."""
+    try:
+        user.is_admin = is_admin
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error updating admin status for user {user.id}: {e}") 

@@ -9,6 +9,7 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 class Config:
     """Base configuration class."""
     SECRET_KEY = os.environ.get('SECRET_KEY', 'a_default_highly_secret_and_static_key_for_dev')
+    ADMIN_EMAILS = [email.strip() for email in os.environ.get('ADMIN_EMAILS', '').split(',') if email.strip()]
     
     # Database paths
     USER_DB_NAME = os.path.join(_PROJECT_ROOT, 'database', 'user_data.db')
@@ -103,6 +104,11 @@ class Config:
         # 增值智能服务
         'llm_call':               {'standard': 2, 'discount': 2},  # 任何一次对大语言模型的调用 (例如：智能选点、智能纠错等)
         'web_search':             {'standard': 2, 'discount': 2},  # 网络智能搜索功能
+
+        # 导出功能
+        'export_xlsx':            {'standard': 5, 'discount': 5},  # 导出为 XLSX 文件
+        'export_kml':             {'standard': 5, 'discount': 5},  # 导出为 KML 文件
+        'export_shp':             {'standard': 5, 'discount': 5},  # 导出为 SHP 文件
     }
 
     # 4. 用户推荐奖励
