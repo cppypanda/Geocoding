@@ -113,3 +113,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Project-specific files
+*.xlsx
+*.psd

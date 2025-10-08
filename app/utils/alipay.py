@@ -35,6 +35,6 @@ def get_alipay_client():
         app_private_key_string=app_private_key_string,
         alipay_public_key_string=alipay_public_key_string,
         sign_type="RSA2",  # RSA2 签名方式
-        debug=current_app.config.get('DEBUG', False)  # 如果是调试模式，则使用沙箱环境
+        debug=current_app.config.get('ALIPAY_DEBUG', False)  # 使用独立的配置项控制支付宝环境
     )
     return alipay

@@ -1,13 +1,39 @@
 {% extends "admin/base.html" %}
 
-{% block title %}待处理充值订单{% endblock %}
+{% block title %}充值订单管理{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3">待处理充值订单</h1>
+    <h1 class="h3">充值订单管理</h1>
+    <div class="btn-group" id="batchActionDropdown" style="display: none;">
+      <button type="button" class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        批量操作 (<span id="selectedCount">0</span>)
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><a class="dropdown-item text-danger" href="#" id="batchDeleteBtn"><i class="bi bi-trash me-2"></i>删除选中</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li><a class="dropdown-item" href="#" id="batchConfirmBtn"><i class="bi bi-check-circle me-2"></i>确认选中 (待处理)</a></li>
+        <li><a class="dropdown-item" href="#" id="batchCancelBtn"><i class="bi bi-x-circle me-2"></i>取消选中 (待处理)</a></li>
+      </ul>
+    </div>
 </div>
 
-{% if orders %}
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'ALL' %}active{% endif %}" href="{{ url_for('payment_bp.admin_orders', status='ALL') }}">所有</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'PENDING' %}active{% endif %}" href="{{ url_for('payment_bp.admin_orders', status='PENDING') }}">待处理</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'COMPLETED' %}active{% endif %}" href="{{ url_for('payment_bp.admin_orders', status='COMPLETED') }}">已完成</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'CANCELLED' %}active{% endif %}" href="{{ url_for('payment_bp.admin_orders', status='CANCELLED') }}">已取消</a>
+    </li>
+</ul>
+
+{% if orders_pagination.items %}
     <!-- Table view for larger screens (lg and up) -->
     <div class="d-none d-lg-block">
         <div class="card shadow-sm">
@@ -15,18 +41,22 @@
                 <table class="table table-hover mb-0 align-middle">
                     <thead class="table-light">
                         <tr>
+                            <th scope="col" class="text-center" style="width: 1%;"><input class="form-check-input" type="checkbox" id="selectAllCheckbox"></th>
                             <th scope="col">订单号</th>
                             <th scope="col">用户信息</th>
                             <th scope="col">套餐名称</th>
                             <th scope="col">金额</th>
                             <th scope="col">积分</th>
+                            <th scope="col">支付方式</th>
+                            <th scope="col">状态</th>
                             <th scope="col">创建时间</th>
                             <th scope="col" class="text-center">操作</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for order in orders %}
+                        {% for order in orders_pagination.items %}
                         <tr>
+                            <td class="text-center"><input class="form-check-input order-checkbox" type="checkbox" value="{{ order.id }}" data-status="{{ order.status }}"></td>
                             <td><code>{{ order.order_number }}</code></td>
                             <td>
                                 <div><i class="bi bi-person-circle me-1"></i> {{ order.user.username or '未设置用户名' }}</div>
@@ -35,20 +65,41 @@
                             <td>{{ order.package_name }}</td>
                             <td>¥{{ "%.2f"|format(order.amount) }}</td>
                             <td>{{ order.points }}</td>
+                            <td>
+                                {% if order.payment_method == 'alipay' %}
+                                    <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝</span>
+                                {% elif order.payment_method == 'wechat' %}
+                                    <span class="badge bg-success-soft text-dark"><i class="bi bi-wechat me-1"></i> 微信支付</span>
+                                {% else %}
+                                    <span class="badge bg-secondary-soft text-dark">{{ order.payment_method or 'N/A' }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if order.status == 'COMPLETED' %}
+                                    <span class="badge bg-success">已完成</span>
+                                {% elif order.status == 'PENDING' %}
+                                    <span class="badge bg-warning text-dark">待处理</span>
+                                {% elif order.status == 'CANCELLED' %}
+                                    <span class="badge bg-secondary">已取消</span>
+                                {% else %}
+                                    <span class="badge bg-light text-dark">{{ order.status }}</span>
+                                {% endif %}
+                            </td>
                             <td class="text-nowrap">{{ order.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                             <td class="text-center text-nowrap">
-                                <form action="{{ url_for('payment_bp.admin_confirm_order', order_id=order.id) }}" method="POST" class="d-inline-block me-2">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                    <button type="submit" class="btn btn-success btn-sm">
-                                        <i class="bi bi-check-circle-fill me-1"></i> 确认
-                                    </button>
-                                </form>
-                                <form action="{{ url_for('payment_bp.admin_cancel_order', order_id=order.id) }}" method="POST" class="d-inline-block">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('确定要取消这个订单吗？此操作不可逆！');">
-                                        <i class="bi bi-x-circle-fill me-1"></i> 取消
-                                    </button>
-                                </form>
+                                {% if order.status == 'PENDING' %}
+                                <button type="button" class="btn btn-success btn-sm" onclick="performAction('confirm', [{{ order.id }}])">
+                                    <i class="bi bi-check-circle-fill me-1"></i> 确认
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="performAction('cancel', [{{ order.id }}])">
+                                    <i class="bi bi-x-circle-fill me-1"></i> 取消
+                                </button>
+                                {% else %}
+                                    -
+                                {% endif %}
+                                <button type="button" class="btn btn-outline-danger btn-sm ms-2" onclick="performAction('delete', [{{ order.id }}])">
+                                    <i class="bi bi-trash-fill"></i>
+                                </button>
                             </td>
                         </tr>
                         {% endfor %}
@@ -60,11 +111,14 @@
 
     <!-- Card view for smaller screens (down from lg) -->
     <div class="d-lg-none">
-        {% for order in orders %}
+        {% for order in orders_pagination.items %}
         <div class="card shadow-sm mb-3">
             <div class="card-header d-flex justify-content-between">
-                <strong>订单号:</strong>
-                <code>{{ order.order_number }}</code>
+                <div>
+                    <strong>订单号:</strong>
+                    <code>{{ order.order_number }}</code>
+                </div>
+                <input class="form-check-input order-checkbox" type="checkbox" value="{{ order.id }}" data-status="{{ order.status }}">
             </div>
             <div class="card-body">
                 <h6 class="card-subtitle mb-2 text-muted">用户信息</h6>
@@ -77,31 +131,224 @@
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>套餐:</span> <strong>{{ order.package_name }}</strong></li>
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>金额:</span> <strong class="text-danger">¥{{ "%.2f"|format(order.amount) }}</strong></li>
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>积分:</span> <strong>{{ order.points }}</strong></li>
+                    <li class="list-group-item px-0 d-flex justify-content-between"><span>支付方式:</span>
+                        <strong>
+                        {% if order.payment_method == 'alipay' %}
+                            <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝</span>
+                        {% elif order.payment_method == 'wechat' %}
+                            <span class="badge bg-success-soft text-dark"><i class="bi bi-wechat me-1"></i> 微信支付</span>
+                        {% else %}
+                            <span class="badge bg-secondary-soft text-dark">{{ order.payment_method or 'N/A' }}</span>
+                        {% endif %}
+                        </strong>
+                    </li>
+                    <li class="list-group-item px-0 d-flex justify-content-between"><span>状态:</span> 
+                        <strong>
+                        {% if order.status == 'COMPLETED' %}
+                            <span class="badge bg-success">已完成</span>
+                        {% elif order.status == 'PENDING' %}
+                            <span class="badge bg-warning text-dark">待处理</span>
+                        {% elif order.status == 'CANCELLED' %}
+                            <span class="badge bg-secondary">已取消</span>
+                        {% else %}
+                            <span class="badge bg-light text-dark">{{ order.status }}</span>
+                        {% endif %}
+                        </strong>
+                    </li>
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>创建时间:</span> <small>{{ order.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</small></li>
                 </ul>
             </div>
             <div class="card-footer text-center bg-light">
-                <form action="{{ url_for('payment_bp.admin_confirm_order', order_id=order.id) }}" method="POST" class="d-inline-block me-2">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <button type="submit" class="btn btn-success">
-                        <i class="bi bi-check-circle-fill me-1"></i> 确认收款
-                    </button>
-                </form>
-                <form action="{{ url_for('payment_bp.admin_cancel_order', order_id=order.id) }}" method="POST" class="d-inline-block">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <button type="submit" class="btn btn-outline-danger" onclick="return confirm('确定要取消这个订单吗？此操作不可逆！');">
-                        <i class="bi bi-x-circle-fill me-1"></i> 取消订单
-                    </button>
-                </form>
+                {% if order.status == 'PENDING' %}
+                <button type="button" class="btn btn-success" onclick="performAction('confirm', [{{ order.id }}])">
+                    <i class="bi bi-check-circle-fill me-1"></i> 确认收款
+                </button>
+                <button type="button" class="btn btn-outline-danger" onclick="performAction('cancel', [{{ order.id }}])">
+                    <i class="bi bi-x-circle-fill me-1"></i> 取消订单
+                </button>
+                {% endif %}
+                <button type="button" class="btn btn-sm btn-outline-danger" onclick="performAction('delete', [{{ order.id }}])">
+                    <i class="bi bi-trash-fill me-1"></i> 删除订单
+                </button>
             </div>
         </div>
         {% endfor %}
     </div>
 
+    <!-- Pagination -->
+    <nav aria-label="Page navigation">
+        <ul class="pagination justify-content-center">
+            <li class="page-item {% if not orders_pagination.has_prev %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('payment_bp.admin_orders', page=orders_pagination.prev_num, status=selected_status) }}">上一页</a>
+            </li>
+            {% for page_num in orders_pagination.iter_pages() %}
+                {% if page_num %}
+                    <li class="page-item {% if page_num == orders_pagination.page %}active{% endif %}">
+                        <a class="page-link" href="{{ url_for('payment_bp.admin_orders', page=page_num, status=selected_status) }}">{{ page_num }}</a>
+                    </li>
+                {% else %}
+                    <li class="page-item disabled"><a class="page-link" href="#">...</a></li>
+                {% endif %}
+            {% endfor %}
+            <li class="page-item {% if not orders_pagination.has_next %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('payment_bp.admin_orders', page=orders_pagination.next_num, status=selected_status) }}">下一页</a>
+            </li>
+        </ul>
+    </nav>
+
 {% else %}
-    <div class="alert alert-success text-center" role="alert">
-        <h4 class="alert-heading">太棒了！</h4>
-        <p>所有订单都已处理完毕，当前没有待处理的订单。</p>
+    <div class="alert alert-info text-center" role="alert">
+        <h4 class="alert-heading">空空如也</h4>
+        <p>在当前筛选条件下，没有找到任何订单。</p>
     </div>
 {% endif %}
+{% endblock %} 
+
+{% block scripts %}
+{{ super() }}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    const orderCheckboxes = document.querySelectorAll('.order-checkbox');
+    const batchActionDropdown = document.getElementById('batchActionDropdown');
+    const selectedCountSpan = document.getElementById('selectedCount');
+    const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+    const batchConfirmBtn = document.getElementById('batchConfirmBtn');
+    const batchCancelBtn = document.getElementById('batchCancelBtn');
+    const csrfToken = '{{ csrf_token() }}';
+
+    function getSelectedOrderIds() {
+        const selectedIds = new Set();
+        document.querySelectorAll('.order-checkbox:checked').forEach(cb => {
+            selectedIds.add(cb.value);
+        });
+        return Array.from(selectedIds);
+    }
+    
+    window.performAction = async function (action, orderIds) {
+        if (!orderIds || orderIds.length === 0) {
+            alert('请至少选择一个订单。');
+            return;
+        }
+
+        let actionText = '';
+        if(action === 'delete') actionText = '删除';
+        else if(action === 'confirm') actionText = '确认';
+        else if(action === 'cancel') actionText = '取消';
+
+        let confirmMessage = `确定要对 ${orderIds.length} 个订单执行【${actionText}】操作吗？`;
+        if (action === 'delete') {
+            confirmMessage += '\n此操作不可恢复！';
+        }
+        if (!confirm(confirmMessage)) {
+            return;
+        }
+
+        try {
+            const response = await fetch("{{ url_for('payment_bp.admin_batch_action') }}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({
+                    order_ids: orderIds,
+                    action: action
+                })
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+                window.location.reload();
+            } else {
+                alert('操作失败: ' + (data.message || '未知错误'));
+            }
+        } catch (error) {
+            console.error('操作请求失败:', error);
+            alert('请求失败，请检查网络连接或查看控制台日志。');
+        }
+    }
+
+    function updateBatchActionButton() {
+        const count = getSelectedOrderIds().length;
+        if (count > 0) {
+            selectedCountSpan.textContent = count;
+            batchActionDropdown.style.display = 'block';
+        } else {
+            batchActionDropdown.style.display = 'none';
+        }
+    }
+    
+    function syncCheckboxes(changedCheckbox) {
+        const value = changedCheckbox.value;
+        const isChecked = changedCheckbox.checked;
+        document.querySelectorAll(`.order-checkbox[value="${value}"]`).forEach(cb => {
+            if (cb !== changedCheckbox) {
+                cb.checked = isChecked;
+            }
+        });
+    }
+
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function () {
+            orderCheckboxes.forEach(checkbox => {
+                checkbox.checked = this.checked;
+            });
+            updateBatchActionButton();
+        });
+    }
+
+    orderCheckboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', function () {
+            syncCheckboxes(this);
+            
+            if (!this.checked) {
+                if (selectAllCheckbox) selectAllCheckbox.checked = false;
+            } else {
+                const allChecked = Array.from(orderCheckboxes).every(c => c.checked);
+                if (allChecked && selectAllCheckbox) selectAllCheckbox.checked = true;
+            }
+            updateBatchActionButton();
+        });
+    });
+    
+    // Batch action buttons
+    if (batchDeleteBtn) {
+        batchDeleteBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            performAction('delete', getSelectedOrderIds());
+        });
+    }
+    if (batchConfirmBtn) {
+        batchConfirmBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pendingIds = Array.from(document.querySelectorAll('.order-checkbox:checked'))
+                                    .filter(cb => cb.dataset.status === 'PENDING')
+                                    .map(cb => cb.value);
+            const uniquePendingIds = [...new Set(pendingIds)];
+            if (uniquePendingIds.length === 0) {
+                alert('请选择状态为“待处理”的订单进行操作。');
+                return;
+            }
+            performAction('confirm', uniquePendingIds);
+        });
+    }
+    if (batchCancelBtn) {
+        batchCancelBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pendingIds = Array.from(document.querySelectorAll('.order-checkbox:checked'))
+                                    .filter(cb => cb.dataset.status === 'PENDING')
+                                    .map(cb => cb.value);
+            const uniquePendingIds = [...new Set(pendingIds)];
+            if (uniquePendingIds.length === 0) {
+                alert('请选择状态为“待处理”的订单进行操作。');
+                return;
+            }
+            performAction('cancel', uniquePendingIds);
+        });
+    }
+
+    // Initial check in case of page refresh with checked boxes
+    updateBatchActionButton();
+});
+</script>
 {% endblock %} 

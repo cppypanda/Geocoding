@@ -3,7 +3,7 @@ import json
 from flask import Blueprint, request, jsonify, current_app, render_template, abort, flash, redirect, url_for
 from flask_login import login_required, current_user
 from datetime import datetime
-from .. import db
+from .. import db, csrf
 from ..models import User, RechargeOrder, Notification, Feedback
 
 from app.utils.alipay import get_alipay_client
@@ -31,6 +31,7 @@ def create_recharge_order():
 
     data = request.get_json()
     package_id = data.get('package_id')
+    payment_method = data.get('payment_method') # e.g., 'alipay', 'wechat'
 
     recharge_packages = current_app.config.get(RECHARGE_PACKAGES_CONFIG_KEY, {})
 
@@ -52,7 +53,8 @@ def create_recharge_order():
             package_name=package['name'],
             amount=package['price'],
             points=package['points'],
-            status='PENDING'
+            status='PENDING',
+            payment_method=payment_method
         )
         db.session.add(new_order)
         db.session.commit()
@@ -102,6 +104,7 @@ def initiate_payment():
         return jsonify({'success': False, 'message': '创建支付链接失败'}), 500
 
 @payment_bp.route('/payment/alipay_notify', methods=['POST'])
+@csrf.exempt
 def alipay_notify():
     """Alipay asynchronous notification callback."""
     data = request.form.to_dict()
@@ -125,6 +128,7 @@ def alipay_notify():
                 return "success", 200
 
             order.status = 'COMPLETED'
+            order.payment_method = 'alipay' # Confirm payment method
             order.updated_at = datetime.utcnow()
             
             user = User.query.get(order.user_id)
@@ -149,68 +153,82 @@ def alipay_notify():
 def admin_orders():
     if not current_user.is_admin:
         abort(403)
-        
-    pending_orders = RechargeOrder.query.filter_by(status='PENDING').join(User).order_by(RechargeOrder.created_at.desc()).all()
-    return render_template('admin/orders.html', orders=pending_orders)
-
-@payment_bp.route('/admin/confirm_order/<int:order_id>', methods=['POST'])
-@login_required
-def admin_confirm_order(order_id):
-    if not current_user.is_admin:
-        abort(403)
-
-    try:
-        order = RechargeOrder.query.get(order_id)
-        if not order:
-            flash('订单不存在', 'danger')
-            return redirect(url_for('payment_bp.admin_orders'))
-        if order.status != 'PENDING':
-            flash('订单状态不正确，可能已被处理', 'warning')
-            return redirect(url_for('payment_bp.admin_orders'))
-            
-        user = User.query.get(order.user_id)
-        if user:
-            user.points += order.points
-        
-        order.status = 'COMPLETED'
-        order.updated_at = datetime.utcnow()
-        
-        db.session.commit()
-
-        create_notification(order.user_id, f"您的 {order.amount} 元充值已到账，{order.points} 积分已发放！")
-        flash(f"订单 {order_id} 已确认，积分已成功充值!", 'success')
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error confirming order {order_id}: {e}")
-        flash('处理订单时发生数据库错误', 'danger')
     
-    return redirect(url_for('payment_bp.admin_orders'))
+    status = request.args.get('status', 'ALL')
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
 
-@payment_bp.route('/admin/cancel_order/<int:order_id>', methods=['POST'])
+    query = RechargeOrder.query.join(User).order_by(RechargeOrder.created_at.desc())
+
+    if status != 'ALL':
+        query = query.filter(RechargeOrder.status == status)
+
+    orders_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    return render_template('admin/orders.html', orders_pagination=orders_pagination, selected_status=status)
+
+@payment_bp.route('/admin/orders/batch_action', methods=['POST'])
 @login_required
-def admin_cancel_order(order_id):
+def admin_batch_action():
     if not current_user.is_admin:
         abort(403)
-        
-    try:
-        order = RechargeOrder.query.get(order_id)
-        if not order:
-            flash('订单不存在', 'danger')
-            return redirect(url_for('payment_bp.admin_orders'))
-        if order.status != 'PENDING':
-            flash('订单状态不正确，无法取消', 'warning')
-            return redirect(url_for('payment_bp.admin_orders'))
+
+    data = request.get_json()
+    order_ids = data.get('order_ids')
+    action = data.get('action')
+
+    if not order_ids or not action:
+        return jsonify({'success': False, 'message': '缺少参数'}), 400
+
+    if action not in ['delete', 'confirm', 'cancel']:
+        return jsonify({'success': False, 'message': '无效的操作'}), 400
+
+    processed_count = 0
+    errors = []
+
+    for order_id in order_ids:
+        try:
+            order = RechargeOrder.query.get(order_id)
+            if not order:
+                errors.append(f"订单ID {order_id} 不存在")
+                continue
             
-        order.status = 'CANCELLED'
-        order.updated_at = datetime.utcnow()
-        db.session.commit()
-        flash(f"订单 {order_id} 已成功取消。", 'info')
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error cancelling order {order_id}: {e}")
-        flash('处理订单时发生数据库错误', 'danger')
-            
-    return redirect(url_for('payment_bp.admin_orders')) 
+            if action == 'delete':
+                db.session.delete(order)
+            elif action == 'confirm':
+                if order.status == 'PENDING':
+                    user = User.query.get(order.user_id)
+                    if user:
+                        user.points += order.points
+                    order.status = 'COMPLETED'
+                    order.updated_at = datetime.utcnow()
+                    create_notification(order.user_id, f"您的 {order.amount} 元充值已到账，{order.points} 积分已发放！")
+                else:
+                    errors.append(f"订单 {order.order_number} 状态不正确，无法确认")
+                    continue
+            elif action == 'cancel':
+                if order.status == 'PENDING':
+                    order.status = 'CANCELLED'
+                    order.updated_at = datetime.utcnow()
+                else:
+                    errors.append(f"订单 {order.order_number} 状态不正确，无法取消")
+                    continue
+
+            processed_count += 1
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"批量操作失败，订单ID {order_id}，操作: {action}，错误: {e}")
+            return jsonify({'success': False, 'message': f'处理订单ID {order_id} 时发生内部错误'}), 500
+
+    db.session.commit()
+
+    message = f"成功处理 {processed_count} 个订单。"
+    if errors:
+        message += " 部分订单处理失败：" + "；".join(errors)
+    
+    flash(message, 'success' if not errors else 'warning')
+    return jsonify({'success': True, 'message': message})
+
 
 @payment_bp.route('/admin/feedback')
 @login_required

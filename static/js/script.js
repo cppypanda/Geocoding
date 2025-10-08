@@ -336,7 +336,10 @@ function initializeButtons() {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': csrfToken // 添加 CSRF token
                 },
-                body: JSON.stringify({ package_id: selectedPackageId })
+                body: JSON.stringify({ 
+                    package_id: selectedPackageId,
+                    payment_method: selectedPaymentMethod
+                })
             });
             if (resp.status === 401) {
                 showToast('请先登录后再充值', 'warning');

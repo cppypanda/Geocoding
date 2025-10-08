@@ -1,7 +1,6 @@
 import asyncio
 import re
 import json
-import sqlite3
 import time
 import os
 from datetime import datetime
@@ -10,14 +9,12 @@ import jionlp as jio
 from flask import Blueprint, request, jsonify, session, current_app, send_file
 from flask_login import login_required, current_user
 
-from .. import config
 from ..services import geocoding_apis, poi_search, llm_service
 from ..services.web_search_local import search_sogou
 from ..utils import geo_transforms, decorators, api_managers, address_processing
 from ..utils.auth import login_required
 from ..utils.log_context import request_context_var
-from ..models import LocationType, User # Import the model
-from .. import db # Import db instance
+from ..models import LocationType, User, ApiRequestLog, db
 from ..services import user_service
 
 geocoding_bp = Blueprint('geocoding', __name__, url_prefix='/geocode')
@@ -86,38 +83,51 @@ def get_points_cost(task_name, used_user_key, token_count=0):
     return base_cost
 
 def get_daily_request_count(user_id, service_name, current_date=None):
-    """获取用户当日的API请求计数"""
+    """获取用户当日的API请求计数 (使用SQLAlchemy)"""
     if current_date is None:
-        current_date = datetime.now().strftime('%Y-%m-%d')
-    conn = sqlite3.connect(config.USER_DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS api_requests (
-            user_id INTEGER,
-            service_name TEXT,
-            request_date TEXT,
-            request_count INTEGER DEFAULT 0,
-            PRIMARY KEY (user_id, service_name, request_date)
-        )
-    """)
-    cursor.execute("SELECT request_count FROM api_requests WHERE user_id = ? AND service_name = ? AND request_date = ?", 
-                   (user_id, service_name, current_date))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
+        current_date = datetime.utcnow().date()
+    else:
+        if isinstance(current_date, str):
+            current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
+
+    log = ApiRequestLog.query.filter_by(
+        user_id=user_id, 
+        service_name=service_name, 
+        request_date=current_date
+    ).first()
+    
+    return log.request_count if log else 0
 
 def increment_daily_request_count(user_id, service_name, increment_by=1, current_date=None):
-    """增加用户当日的API请求计数"""
+    """增加用户当日的API请求计数 (使用SQLAlchemy)"""
     if current_date is None:
-        current_date = datetime.now().strftime('%Y-%m-%d')
-    conn = sqlite3.connect(config.USER_DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO api_requests (user_id, service_name, request_date, request_count)
-        VALUES (?, ?, ?, COALESCE((SELECT request_count FROM api_requests WHERE user_id = ? AND service_name = ? AND request_date = ?), 0) + ?)
-    """, (user_id, service_name, current_date, user_id, service_name, current_date, increment_by))
-    conn.commit()
-    conn.close()
+        current_date = datetime.utcnow().date()
+    else:
+        if isinstance(current_date, str):
+            current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
+
+    try:
+        log = ApiRequestLog.query.filter_by(
+            user_id=user_id,
+            service_name=service_name,
+            request_date=current_date
+        ).first()
+
+        if log:
+            log.request_count += increment_by
+        else:
+            log = ApiRequestLog(
+                user_id=user_id,
+                service_name=service_name,
+                request_date=current_date,
+                request_count=increment_by
+            )
+            db.session.add(log)
+        
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Failed to increment request count for user {user_id}: {e}")
 
 async def _perform_reverse_geocoding(winner_result, user_id, parsed_original_address: dict):
     """(SOP Step 4) Performs deferred reverse geocoding and ensures data consistency."""

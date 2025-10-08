@@ -11,9 +11,6 @@ class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'a_default_highly_secret_and_static_key_for_dev')
     ADMIN_EMAILS = [email.strip() for email in os.environ.get('ADMIN_EMAILS', '').split(',') if email.strip()]
     
-    # Database paths
-    USER_DB_NAME = os.path.join(_PROJECT_ROOT, 'database', 'user_data.db')
-
     # SQLAlchemy a configuration
     # Read the database URL from an environment variable.
     # This will raise a KeyError if the environment variable is not set,
@@ -143,6 +140,10 @@ class Config:
 class DevelopmentConfig(Config):
     """Development configuration."""
     DEBUG = True
+    # In development, prioritize DEV_DATABASE_URL, but fall back to the main DATABASE_URL.
+    # The SQLite fallback is removed to enforce PostgreSQL usage across all environments.
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL', os.environ.get('DATABASE_URL'))
+    ALIPAY_DEBUG = True
 
 class ProductionConfig(Config):
     """Production configuration."""

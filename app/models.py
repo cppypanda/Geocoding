@@ -119,6 +119,7 @@ class RechargeOrder(db.Model):
     amount = db.Column(db.Float, nullable=False)
     points = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String, nullable=False, default='PENDING') # PENDING, COMPLETED, CANCELLED
+    payment_method = db.Column(db.String, nullable=True) # e.g., 'alipay', 'wechat'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=True, onupdate=datetime.utcnow)
 
@@ -131,3 +132,13 @@ class LocationType(db.Model):
     usage_count = db.Column(db.Integer, nullable=False, default=1)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     last_used_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class ApiRequestLog(db.Model):
+    __tablename__ = 'api_request_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    service_name = db.Column(db.String, nullable=False)
+    request_date = db.Column(db.Date, nullable=False, default=datetime.utcnow)
+    request_count = db.Column(db.Integer, default=0)
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'service_name', 'request_date', name='_user_service_date_uc'),)
