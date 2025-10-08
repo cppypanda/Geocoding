@@ -1,4 +1,5 @@
 import { showToast } from './utils.js';
+import { fetchAPI } from './api.js';
 
 // 智能地址情报三步骤模块
 class WebIntelligenceManager {
@@ -202,17 +203,10 @@ class WebIntelligenceManager {
             resultsDiv.style.display = 'none';
 
             // 调用后端API
-            const response = await fetch('/geocode/web_intelligence/search_collate', {
+            const data = await fetchAPI('/geocode/web_intelligence/search_collate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ original_address: this.currentAddress })
             });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.message || '搜集信息失败');
-            }
 
             if (data.success) {
                 this.dossier = data.dossier;
@@ -292,9 +286,8 @@ class WebIntelligenceManager {
                 this.currentAddress = input.value.trim();
             }
 
-            const response = await fetch('/geocode/web_intelligence/suggest_keywords', {
+            const data = await fetchAPI('/geocode/web_intelligence/suggest_keywords', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     original_address: this.currentAddress,
                     poi_candidates: this.poiCandidates,
@@ -302,12 +295,6 @@ class WebIntelligenceManager {
                     mismatch_reasons: (this.validationResult && this.validationResult.mismatch_reasons) ? this.validationResult.mismatch_reasons : []
                 })
             });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.message || '生成关键词建议失败');
-            }
 
             if (data.success) {
                 this.keywordSuggestions = data.keyword_suggestions;

@@ -3,6 +3,7 @@ import logging
 from flask import Flask, request, jsonify, render_template, send_file, session, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
 from .config import config_by_name
 from zhipuai import ZhipuAI
 from .utils.log_context import ContextFilter
@@ -10,6 +11,7 @@ from .utils.log_context import ContextFilter
 # Initialize extensions
 db = SQLAlchemy()
 login_manager = LoginManager()
+csrf = CSRFProtect()
 # Redirect users to the main page to log in if they try to access a protected page
 login_manager.login_view = 'main.index'
 
@@ -36,6 +38,7 @@ def create_app(config_name=None, config_overrides=None):
     # Initialize extensions with the app
     db.init_app(app)
     login_manager.init_app(app)
+    csrf.init_app(app)
 
     if app.config.get('ZHIPUAI_KEY'):
         app.extensions['zhipuai_client'] = ZhipuAI(api_key=app.config['ZHIPUAI_KEY'])
@@ -56,17 +59,20 @@ def create_app(config_name=None, config_overrides=None):
 
     # Register blueprints
     from .routes.main import main_bp
-    app.register_blueprint(main_bp)
     from .routes.auth import auth_bp
-    app.register_blueprint(auth_bp)
-    from .routes.geocoding import geocoding_bp
-    app.register_blueprint(geocoding_bp)
     from .routes.user import user_bp
-    app.register_blueprint(user_bp)
-    from .routes.payment_bp import payment_bp
-    app.register_blueprint(payment_bp)
+    from .routes.geocoding import geocoding_bp
     from .routes.task_routes import task_bp
+    from .routes.payment_bp import payment_bp
+    from .routes.admin import admin_bp
+
+    app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(user_bp)
+    app.register_blueprint(geocoding_bp)
     app.register_blueprint(task_bp)
+    app.register_blueprint(payment_bp)
+    app.register_blueprint(admin_bp)
 
     @app.route('/uploads/<path:filename>')
     def uploaded_file(filename):

@@ -531,7 +531,14 @@ async function hybridSelectPointFromMapSearch() {
 
         const code = (data && data.message) || 'NO_HIGH_CONFIDENCE';
         return { ok: false, code };
+
     } catch (error) {
+        // 当自动选点API本身抛出错误时（例如网络问题或内部错误），进行区分
+        // 如果错误消息明确指出是“无高置信度”，则将其作为一种预期的业务逻辑“失败”，而非技术错误
+        if (error && error.message && error.message.includes('NO_HIGH_CONFIDENCE')) {
+            return { ok: false, code: 'NO_HIGH_CONFIDENCE' };
+        }
+        // 对于其他所有未知或网络错误，返回通用错误码
         return { ok: false, code: 'LLM_ERROR' };
     }
 }

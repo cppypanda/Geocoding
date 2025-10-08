@@ -1,4 +1,4 @@
-import { geocodeAddresses, autoSelectPoint } from './api.js';
+import { geocodeAddresses, autoSelectPoint, fetchAPI } from './api.js';
 import { ENDPOINTS, SELECTORS } from './constants.js';
 import { showToast } from './utils.js';
 import { displayCascadeResults } from './ui.js'; // This will be moved to results-table.js later
@@ -39,17 +39,16 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
     }
 
     try {
-        console.log('开始地理编码处理:', {
+        /* console.log('开始地理编码处理:', {
             addresses,
             isSmartMode,
             locationTags
-        });
+        }); */
 
         // 异步记录使用过的后缀，这是一个"即发即忘"的请求，不阻塞主流程
         if (locationTags.length > 0) {
-            fetch(ENDPOINTS.recordUsedSuffixes, {
+            fetchAPI(ENDPOINTS.recordUsedSuffixes, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ suffixes: locationTags })
             }).catch(error => {
                 // 在后台默默记录错误，不打扰用户
@@ -59,10 +58,10 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
 
         // 显示批量结果容器和加载遮罩
         const cascadeContainer = document.querySelector(SELECTORS.resultsContainer);
-        console.log('🎯 查找结果容器:', cascadeContainer);
+        // console.log('🎯 查找结果容器:', cascadeContainer);
         if (cascadeContainer) {
             cascadeContainer.style.display = 'block';
-            console.log('✅ 结果容器已显示');
+            // console.log('✅ 结果容器已显示');
             // 确保容器布局稳定，再初始化/校准地图
             await new Promise(r => setTimeout(r, 120));
         } else {
@@ -89,7 +88,7 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
                 const taskNameDisplay = document.getElementById('taskNameDisplay');
                 if (taskNameDisplay && themeName !== '地理编码任务') {
                     taskNameDisplay.textContent = themeName;
-                    console.log('已自动设置任务名称:', themeName);
+                    // console.log('已自动设置任务名称:', themeName);
                 }
                 
                 
@@ -129,18 +128,18 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
         
         // 更新结果表格
         const cascadeTableBody = document.getElementById('cascadeResultsBody');
-        console.log('🎯 查找结果表格:', cascadeTableBody);
+        /* console.log('🎯 查找结果表格:', cascadeTableBody);
         console.log('🎯 结果数据:', currentResults);
-        console.log('🎯 结果数据长度:', currentResults.length);
+        console.log('🎯 结果数据长度:', currentResults.length); */
         
         if (cascadeTableBody) {
-            console.log('✅ 开始显示结果到表格...');
+            // console.log('✅ 开始显示结果到表格...');
             if (typeof window.updateResultsTable === 'function') {
                 window.updateResultsTable(currentResults, { scroll: true });
             } else {
                 displayCascadeResults(cascadeTableBody, currentResults);
             }
-            console.log('✅ 结果表格已更新');
+            // console.log('✅ 结果表格已更新');
         } else {
             console.error('❌ 未找到结果表格 #cascadeResultsBody');
         }
@@ -148,9 +147,9 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
         // 更新地图标记（确保地图可用）
         const ensuredMap = resultsOverviewMap || ensureResultsOverviewMap('map');
         if (ensuredMap) {
-            console.log('🗺️ 更新地图标记...');
+            // console.log('🗺️ 更新地图标记...');
             updateResultsOverviewMapMarkers(ensuredMap, selectedResults);
-            console.log('✅ 地图标记已更新');
+            // console.log('✅ 地图标记已更新');
             try { window.resultsOverviewMap = ensuredMap; } catch (e) {}
         } else {
             console.log('⚠️ 总览地图未提供，跳过地图更新');
@@ -158,13 +157,13 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
 
         // 重新获取容器以确保滚动
         const finalCascadeContainer = document.querySelector(SELECTORS.resultsContainer);
-        console.log('🎯 滚动目标容器:', finalCascadeContainer);
+        // console.log('🎯 滚动目标容器:', finalCascadeContainer);
         
         // 滚动到结果区域
         if (finalCascadeContainer) {
-            console.log('📜 开始滚动到结果区域...');
+            // console.log('📜 开始滚动到结果区域...');
             finalCascadeContainer.scrollIntoView({ behavior: 'smooth' });
-            console.log('✅ 滚动完成');
+            // console.log('✅ 滚动完成');
         } else {
             console.error('❌ 滚动失败：未找到结果容器');
         }
@@ -258,7 +257,7 @@ export async function handleAutoSelect() {
             console.warn('LLM auto-select failed:', response.error, 'Reasons:', response.reasons);
             
             if (response.error === 'NO_HIGH_CONFIDENCE' || response.error === 'NEED_WEB_INFO') {
-                showToast(`智能选点弃权。${reasonText}`, 'info');
+                showToast(`AI未能自动确定最佳匹配项。${reasonText}`, 'info');
             } else {
                 showToast(`智能选点失败: ${response.error}`, 'error');
             }
@@ -269,7 +268,7 @@ export async function handleAutoSelect() {
             const selectedPoi = poiResults[response.selected_index];
             if (selectedPoi) {
                 const reasonText = response.llm_reason || '高置信度匹配';
-                console.log('LLM auto-selected POI:', selectedPoi, 'Reason:', reasonText);
+                // console.log('LLM auto-selected POI:', selectedPoi, 'Reason:', reasonText);
                 
                 // This function needs to exist in your UI logic to highlight the result
                 if (typeof selectAndHighlightPoi === 'function') {
@@ -284,7 +283,7 @@ export async function handleAutoSelect() {
                 showToast('智能选点返回索引无效。', 'error');
             }
         } else {
-            console.log('LLM did not return a valid selection or error.');
+            // console.log('LLM did not return a valid selection or error.');
             showToast('智能选点未返回明确结果。', 'warning');
         }
     } catch (error) {

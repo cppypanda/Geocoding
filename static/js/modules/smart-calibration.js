@@ -11,7 +11,7 @@ async function clickElement(selector, waitTime = 50) {
         await sleep(waitTime);
         return true;
     }
-    console.error(`[DEBUG] Element not found for selector: ${selector}`);
+    // console.error(`[DEBUG] Element not found for selector: ${selector}`);
     return false;
 }
 
@@ -23,7 +23,7 @@ function setSelectValue(selector, value) {
         select.dispatchEvent(new Event('change'));
         return true;
     }
-    console.error(`[DEBUG] Select element not found for selector: ${selector}`);
+    // console.error(`[DEBUG] Select element not found for selector: ${selector}`);
     return false;
 }
 
@@ -38,7 +38,7 @@ function waitForElementVisible(selector, timeout = 5000) {
                 resolve(element);
             } else if (Date.now() - startTime > timeout) {
                 clearInterval(interval);
-                reject(new Error(`[DEBUG] Timeout waiting for element ${selector} to become visible.`));
+                reject(new Error(`Timeout waiting for element ${selector} to become visible.`));
             }
         }, 100);
     });
@@ -58,7 +58,7 @@ function waitForElementExists(selector, timeout = 5000) {
                 elapsedTime += interval;
                 if (elapsedTime >= timeout) {
                     clearInterval(timer);
-                    reject(new Error(`[DEBUG] Timeout waiting for element ${selector} to exist in the DOM.`));
+                    reject(new Error(`Timeout waiting for element ${selector} to exist in the DOM.`));
                 }
             }
         }, interval);
@@ -70,7 +70,7 @@ function waitForBootstrapCollapse(selector, timeout = 5000) {
     return new Promise((resolve, reject) => {
         const element = document.querySelector(selector);
         if (!element) {
-            return reject(new Error(`[DEBUG] Bootstrap element not found for selector: ${selector}`));
+            return reject(new Error(`Bootstrap element not found for selector: ${selector}`));
         }
 
         // If it's already visible, resolve immediately.
@@ -80,7 +80,7 @@ function waitForBootstrapCollapse(selector, timeout = 5000) {
 
         const timeoutId = setTimeout(() => {
             element.removeEventListener('shown.bs.collapse', handler);
-            reject(new Error(`[DEBUG] Timeout waiting for Bootstrap element ${selector} to be shown.`));
+            reject(new Error(`Timeout waiting for Bootstrap element ${selector} to be shown.`));
         }, timeout);
 
         const handler = () => {
@@ -106,7 +106,7 @@ function waitForSpinnerToDisappear(selector, timeout = 120000) { // Default time
                 resolve();
             } else if (Date.now() - startTime > timeout) {
                 clearInterval(interval);
-                reject(new Error(`[DEBUG] Timeout waiting for spinner ${selector} to disappear.`));
+                reject(new Error(`Timeout waiting for spinner ${selector} to disappear.`));
             }
         }, 500);
     });
@@ -114,7 +114,7 @@ function waitForSpinnerToDisappear(selector, timeout = 120000) { // Default time
 
 // The core success checker: waits for the selected result card to update.
 async function waitForResultUpdate(initialAddressText, timeout = 500) {
-    console.log(`[DEBUG] Waiting for result update. Initial text: "${initialAddressText.substring(0, 20)}..."`);
+    // console.log(`[DEBUG] Waiting for result update. Initial text: "${initialAddressText.substring(0, 20)}..."`);
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
         const card = document.querySelector('#selectedResultDetailCard');
@@ -122,23 +122,23 @@ async function waitForResultUpdate(initialAddressText, timeout = 500) {
         
         // Success condition: card is visible AND the address text has changed.
         if (card && card.style.display !== 'none' && currentAddressElement && currentAddressElement.textContent.trim() !== initialAddressText) {
-            console.log(`[DEBUG] SUCCESS: Selected result card updated to "${currentAddressElement.textContent.trim().substring(0, 20)}..."`);
+            // console.log(`[DEBUG] SUCCESS: Selected result card updated to "${currentAddressElement.textContent.trim().substring(0, 20)}..."`);
             return true;
         }
         await sleep(250); // Poll every 250ms
     }
-    console.log('[DEBUG] TIMEOUT: Result card did not update within the time limit.');
+    // console.log('[DEBUG] TIMEOUT: Result card did not update within the time limit.');
     return false;
 }
 
 
 async function calibrateSingleAddress(row, rowIndex) {
     const originalAddress = row.querySelector('td:nth-child(2)').textContent.trim();
-    console.log(`%c--- [DEBUG] Starting Calibration for row ${rowIndex + 1}: "${originalAddress}" ---`, 'color: blue; font-weight: bold;');
+    // console.log(`%c--- [DEBUG] Starting Calibration for row ${rowIndex + 1}: "${originalAddress}" ---`, 'color: blue; font-weight: bold;');
 
     try {
         // 2.1. Prepare
-        console.log('[DEBUG] Step 2.1: Preparing panel...');
+        // console.log('[DEBUG] Step 2.1: Preparing panel...');
         const viewButton = row.querySelector('.btn-outline-primary');
         if (viewButton) viewButton.click();
         
@@ -152,27 +152,27 @@ async function calibrateSingleAddress(row, rowIndex) {
         // The simplest check is for its `display` style property.
         await waitForElementVisible('#addressSearchToolsContainer');
         
-        console.log('[DEBUG] Step 2.1: Panel ready.');
+        // console.log('[DEBUG] Step 2.1: Panel ready.');
         
         const initialAddressElement = document.querySelector('#selectedFormattedAddress');
         const initialAddressText = initialAddressElement ? initialAddressElement.textContent.trim() : `__NO_INITIAL_RESULT_${Date.now()}__`;
-        console.log(`[DEBUG] Step 2.1: Recorded initial selected address: "${initialAddressText}"`);
+        // console.log(`[DEBUG] Step 2.1: Recorded initial selected address: "${initialAddressText}"`);
 
         // 2.2. POI Search Pole
         const poiSources = ['tianditu', 'amap', 'baidu'];
         for (const source of poiSources) {
-            console.log(`[DEBUG] Step 2.2: Trying POI source: ${source.toUpperCase()}`);
+            // console.log(`[DEBUG] Step 2.2: Trying POI source: ${source.toUpperCase()}`);
             setSelectValue('#map-search-source', source);
             await clickElement('#mapSearchBtn');
             await waitForSpinnerToDisappear('#mapSearchSpinner');
             
             // --- NEW DEBUG LOGGING ---
             const results = window.poiResults || [];
-            console.log(`[DEBUG] POI Search with ${source.toUpperCase()} returned ${results.length} results.`);
+            // console.log(`[DEBUG] POI Search with ${source.toUpperCase()} returned ${results.length} results.`);
             if (results.length > 0) {
                 // Log top 3 results for inspection
                 const topResults = results.slice(0, 3).map(r => ({ name: r.name, address: r.address, confidence: r._confidence }));
-                console.log('[DEBUG] Top 3 results:', JSON.stringify(topResults, null, 2));
+                // console.log('[DEBUG] Top 3 results:', JSON.stringify(topResults, null, 2));
             }
             // --- END NEW DEBUG LOGGING ---
 
@@ -183,28 +183,28 @@ async function calibrateSingleAddress(row, rowIndex) {
         }
 
         // 2.3. Keyword Suggestions
-        console.log('[DEBUG] Step 2.3: POI search failed, trying keywords...');
+        // console.log('[DEBUG] Step 2.3: POI search failed, trying keywords...');
         
         // Step A: Get Web Info
-        console.log('[DEBUG] Step 2.3a: Getting web info...');
+        // console.log('[DEBUG] Step 2.3a: Getting web info...');
         await clickElement('#step1SearchBtn');
         await waitForSpinnerToDisappear('#step1Spinner', 120000); // 2 min timeout
-        console.log('[DEBUG] Step 2.3a: Web info finished.');
+        // console.log('[DEBUG] Step 2.3a: Web info finished.');
 
         // Step B: Generate Keywords
-        console.log('[DEBUG] Step 2.3b: Generating keywords...');
+        // console.log('[DEBUG] Step 2.3b: Generating keywords...');
         await clickElement('#step3SuggestBtn');
         await waitForSpinnerToDisappear('#step3Spinner', 60000); // 1 min timeout
-        console.log('[DEBUG] Step 2.3b: Keyword generation finished.');
+        // console.log('[DEBUG] Step 2.3b: Keyword generation finished.');
 
         // Step C: Try Keywords
         const keywordButtons = document.querySelectorAll('.use-keyword-btn');
         if (keywordButtons.length > 0) {
-            console.log(`[DEBUG] Step 2.3c: Found ${keywordButtons.length} keywords to try.`);
+            // console.log(`[DEBUG] Step 2.3c: Found ${keywordButtons.length} keywords to try.`);
             setSelectValue('#map-search-source', 'tianditu'); // 新顺序：关键词优先用天地图
             for (const button of keywordButtons) {
                 const keywordText = button.closest('.keyword-suggestion').querySelector('strong').textContent;
-                console.log(`[DEBUG] Step 2.3c: Trying keyword: "${keywordText}"`);
+                // console.log(`[DEBUG] Step 2.3c: Trying keyword: "${keywordText}"`);
                 button.click();
                 await waitForSpinnerToDisappear('#mapSearchSpinner');
                 if (await waitForResultUpdate(initialAddressText)) {
@@ -213,23 +213,23 @@ async function calibrateSingleAddress(row, rowIndex) {
                 }
             }
         } else {
-             console.log(`[DEBUG] Step 2.3c: No keywords were generated.`);
+             // console.log(`[DEBUG] Step 2.3c: No keywords were generated.`);
         }
 
         // 2.4. Final Failure
-        console.log(`[DEBUG] FAILURE: All steps tried for "${originalAddress}", but no new result was selected.`);
+        // console.log(`[DEBUG] FAILURE: All steps tried for "${originalAddress}", but no new result was selected.`);
         showToast(`地址 "${originalAddress}" 智能校准失败`, 'warning');
         return false;
 
     } catch (error) {
-        console.error(`[DEBUG] FATAL ERROR during calibration for "${originalAddress}":`, error);
+        console.error(`FATAL ERROR during calibration for "${originalAddress}":`, error);
         showToast(`地址 "${originalAddress}" 校准失败: ${error.message}`, 'error');
         return false;
     }
 }
 
 export async function startSmartCalibration() {
-    console.log("Starting Smart Calibration process...");
+    // console.log("Starting Smart Calibration process...");
     showLoading("正在启动智能校准...");
 
     const resultsTableBody = document.querySelector('#cascadeResultsBody');
@@ -288,7 +288,7 @@ export async function startSmartCalibration() {
             setTimeout(() => {
                 try {
                     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    console.log('[DEBUG] Scrolled to batch results section after smart calibration.');
+                    // console.log('[DEBUG] Scrolled to batch results section after smart calibration.');
                 } catch (e) {
                     // Fallback for environments without smooth scroll options
                     target.scrollIntoView();
@@ -296,6 +296,6 @@ export async function startSmartCalibration() {
             }, 150);
         }
     } catch (e) {
-        console.warn('[DEBUG] Failed to scroll to batch results section:', e);
+        console.warn('Failed to scroll to batch results section:', e);
     }
 }

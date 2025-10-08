@@ -1,5 +1,6 @@
 import { showToast, createAndAppendElement } from './utils.js';
 import { ENDPOINTS } from './constants.js';
+import { fetchAPI } from './api.js';
 
 // This module handles user session management and related UI updates.
 
@@ -221,9 +222,13 @@ async function handleAccountLogin(event) {
     }
 
     try {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
         const response = await fetch(ENDPOINTS.loginAccount, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
             body: JSON.stringify({ username_or_email, password }),
         });
         const data = await response.json();
@@ -236,6 +241,12 @@ async function handleAccountLogin(event) {
             try { await tryBindReferralIfPresent(); } catch (e) {}
             const loginModal = bootstrap.Modal.getInstance(document.getElementById('loginRegisterModal'));
             if (loginModal) loginModal.hide();
+            
+            // 登录成功后，检查并执行待处理的动作
+            if (window.actionAfterLogin && typeof window.actionAfterLogin === 'function') {
+                window.actionAfterLogin();
+                window.actionAfterLogin = null; // 执行后清除
+            }
         } else {
             showToast(data.message || '登录失败', 'error');
         }
@@ -282,6 +293,12 @@ async function handleEmailLoginRegister(event) {
             try { await tryBindReferralIfPresent(); } catch (e) {}
             const loginModal = bootstrap.Modal.getInstance(document.getElementById('loginRegisterModal'));
             if (loginModal) loginModal.hide();
+
+            // 登录成功后，检查并执行待处理的动作
+            if (window.actionAfterLogin && typeof window.actionAfterLogin === 'function') {
+                window.actionAfterLogin();
+                window.actionAfterLogin = null; // 执行后清除
+            }
         } else {
             showToast(data.message || '操作失败', 'error');
         }
@@ -610,15 +627,12 @@ async function handleChangePassword() {
     }
 
     try {
-        const resp = await fetch(ENDPOINTS.changePassword, {
+        const data = await fetchAPI(ENDPOINTS.changePassword, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ old_password: oldPassword, new_password: newPassword, confirm_password: confirmPassword })
         });
-        const data = await resp.json().catch(() => ({ success: false, message: '请求失败' }));
-        if (!resp.ok || !data.success) {
-            showToast(data.message || '修改密码失败', 'error');
-        } else {
+        
+        if (data.success) {
             showToast(data.message || '密码已更新', 'success');
             // 关闭设置窗口并清空输入
             try {
@@ -632,6 +646,8 @@ async function handleChangePassword() {
             setTimeout(() => {
                 showLoginModal();
             }, 400);
+        } else {
+            showToast(data.message || '修改密码失败', 'error');
         }
     } catch (e) {
         showToast('修改密码请求失败', 'error');
@@ -652,12 +668,10 @@ async function handleUpdateProfile(event) {
     }
 
     try {
-        const response = await fetch('/update_user_profile', {
+        const data = await fetchAPI('/update_user_profile', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username: newUsername }),
         });
-        const data = await response.json();
         if (data.success) {
             showToast('用户信息更新成功', 'success');
             updateUserBar(data.user);
@@ -791,12 +805,11 @@ async function tryBindReferralIfPresent() {
         }
         if (!code) return;
 
-        const resp = await fetch(ENDPOINTS.referralBind, {
+        const data = await fetchAPI(ENDPOINTS.referralBind, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ referral_code: code })
         });
-        const data = await resp.json().catch(() => ({ success: false }));
+
         if (data && data.success) {
             showToast('已绑定推荐关系，积分将稍后到账', 'success');
             // 清理URL与localStorage
@@ -806,12 +819,13 @@ async function tryBindReferralIfPresent() {
                 window.history.replaceState({}, '', url.toString());
             } catch (e) {}
             try { localStorage.removeItem('pending_referral_code'); } catch (e) {}
-        } else if (resp.status === 409) {
-            // 已绑定过，不重复提示
-        } else if (resp.status === 404) {
-            // 无效推荐码，不提示
+        } else {
+            // Based on original code, we want to fail silently on 409 or 404
+            // fetchAPI will throw an error, so we catch it and do nothing.
         }
-    } catch (e) {}
+    } catch (e) {
+        // Silently fail, as this is not a critical user-facing error.
+    }
 }
 
 /**

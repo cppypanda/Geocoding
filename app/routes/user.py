@@ -54,6 +54,7 @@ def upload_feedback_image():
         return jsonify({'success': False, 'message': '没有文件部分'}), 400
     
     file = request.files['image']
+    feedback_id = request.form.get('feedback_id', type=int) # Get feedback_id
     
     if file.filename == '':
         return jsonify({'success': False, 'message': '未选择文件'}), 400
@@ -61,8 +62,38 @@ def upload_feedback_image():
     if file and allowed_file(file.filename):
         file_url = upload_file_to_r2(file, folder='feedback')
         if file_url:
+            current_app.logger.info(f"Image uploaded to R2, URL: {file_url}, feedback_id received: {feedback_id}")
+            # If feedback_id is provided, update the record
+            if feedback_id:
+                try:
+                    # Lock the row for update to prevent race conditions
+                    feedback_item = db.session.query(Feedback).filter_by(id=feedback_id).with_for_update().first()
+
+                    if feedback_item and feedback_item.user_id == current_user.id:
+                        current_app.logger.info(f"Found and locked feedback item {feedback_id} for user {current_user.id}.")
+                        
+                        # Update image paths
+                        current_paths = json.loads(feedback_item.image_paths or '[]')
+                        current_paths.append(file_url)
+                        feedback_item.image_paths = json.dumps(current_paths)
+                        
+                        # Update uploaded images count and status
+                        feedback_item.uploaded_images = (feedback_item.uploaded_images or 0) + 1
+                        if feedback_item.uploaded_images >= feedback_item.total_images:
+                            feedback_item.upload_status = 'complete'
+                        
+                        db.session.commit()
+                        current_app.logger.info(f"Successfully updated feedback {feedback_id} with new image path.")
+                    else:
+                        current_app.logger.warning(f"Could not find feedback item {feedback_id} or user mismatch.")
+                except Exception as e:
+                    db.session.rollback()
+                    current_app.logger.error(f"Error updating feedback with image URL: {e}")
+                    # Don't fail the whole upload, just log the error
+            
             return jsonify({'success': True, 'image_url': file_url})
         else:
+            current_app.logger.error("Failed to upload image to R2.")
             return jsonify({'success': False, 'message': '图片上传失败，请重试。'}), 500
             
     return jsonify({'success': False, 'message': '文件类型不允许'}), 400
@@ -72,8 +103,7 @@ def upload_feedback_image():
 def feedback():
     data = request.json
     feedback_text = data.get('feedback_text')
-    # The frontend sends a JSON string of a list of URLs
-    image_urls_str = data.get('image_paths', '[]')
+    total_images = data.get('total_images', 0)
 
     if not feedback_text:
         return jsonify({'success': False, 'message': '反馈内容不能为空。'}), 400
@@ -81,15 +111,18 @@ def feedback():
     new_feedback = Feedback(
         user_id=current_user.id,
         description=feedback_text,
-        image_paths=image_urls_str,
+        image_paths='[]',
         category=data.get('category', 'general'),
-        metadata_json=data.get('metadata', '{}')
+        metadata_json=data.get('metadata', '{}'),
+        total_images=total_images,
+        uploaded_images=0,
+        upload_status='pending_images' if total_images > 0 else 'complete'
     )
     
     try:
         db.session.add(new_feedback)
         db.session.commit()
-        return jsonify({'success': True, 'message': '反馈提交成功！'})
+        return jsonify({'success': True, 'message': '反馈提交成功！', 'feedback_id': new_feedback.id})
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error submitting feedback: {e}")

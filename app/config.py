@@ -143,7 +143,6 @@ class Config:
 class DevelopmentConfig(Config):
     """Development configuration."""
     DEBUG = True
-    ALIPAY_GATEWAY_URL = 'https://openapi-sandbox.alipay.com/gateway.do' # 沙箱环境
 
 class ProductionConfig(Config):
     """Production configuration."""

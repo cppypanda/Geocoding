@@ -1,4 +1,5 @@
 import { createAndAppendElement, showToast } from './utils.js';
+import { fetchAPI } from './api.js';
 
 // --- State for this module ---
 let locationTypeTags = new Set();
@@ -118,18 +119,10 @@ async function autoCompleteAddresses() {
     try {
         if (processingSpan) processingSpan.textContent = `正在发送 ${addresses.length} 个地址...`;
         
-        const response = await fetch('/jionlp_autocomplete', {
+        const data = await fetchAPI('/jionlp_autocomplete', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ addresses: addresses })
         });
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: '无法解析错误信息' }));
-            throw new Error(errorData.detail || `请求失败，状态码: ${response.status}`);
-        }
-        
-        const data = await response.json();
 
         if (data && data.completed_addresses && Array.isArray(data.completed_addresses)) {
             addressesTextarea.value = data.completed_addresses.join('\n');

@@ -2,6 +2,75 @@ import { showLoading, hideLoading, showToast } from './utils.js';
 import { ENDPOINTS } from './constants.js';
 import { updateUserBar } from './auth.js';
 
+const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+/**
+ * A wrapper for the native fetch API.
+ * @param {string} url - The URL to fetch.
+ * @param {object} options - Fetch options (method, headers, body, etc.).
+ * @returns {Promise<object>} - A promise that resolves with the JSON response.
+ */
+export async function fetchAPI(url, options = {}) {
+    const defaultHeaders = {
+        'Accept': 'application/json',
+    };
+
+    // Add Content-Type only if body is not FormData
+    if (!(options.body instanceof FormData)) {
+        defaultHeaders['Content-Type'] = 'application/json';
+    }
+
+    // Add CSRF token to non-GET requests
+    if (options.method && options.method.toUpperCase() !== 'GET') {
+        defaultHeaders['X-CSRFToken'] = csrfToken;
+    }
+
+    const config = {
+        ...options,
+        headers: {
+            ...defaultHeaders,
+            ...options.headers,
+        },
+    };
+
+    try {
+        const response = await fetch(url, config);
+        
+        if (response.status === 401) {
+            // Unauthorized, redirect to login page or show login modal
+            // This is a simple example; you might want more sophisticated handling
+            showToast('请先登录', 'warning');
+            // Or trigger a login modal:
+            // const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+            // loginModal.show();
+            throw new Error('Unauthorized'); 
+        }
+
+        if (!response.ok) {
+            let errorData;
+            try {
+                errorData = await response.json();
+            } catch (e) {
+                // If the error response is not JSON, use the status text
+                throw new Error(response.statusText || 'Network response was not ok');
+            }
+            const errorMessage = errorData.message || 'An unknown error occurred.';
+            throw new Error(errorMessage);
+        }
+        
+        // If the response has no content, return a success indicator
+        if (response.status === 204 || response.headers.get('Content-Length') === '0') {
+            return { success: true };
+        }
+        
+        return await response.json();
+    } catch (error) {
+        console.error('API call failed:', error);
+        showToast(`操作失败: ${error.message}`, 'danger');
+        throw error;
+    }
+}
+
 // Helper function to update user state
 function updateUserState(user) {
     if (user && typeof user.points !== 'undefined') {
@@ -33,23 +102,11 @@ export async function geocodeAddresses(addresses, mode = 'default', locationTags
             user_id: window.currentUser ? window.currentUser.id : null
         };
 
-        const response = await fetch(ENDPOINTS.geocodeProcess, {
+        const data = await fetchAPI(ENDPOINTS.geocodeProcess, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('地理编码请求失败:', {
-                status: response.status,
-                statusText: response.statusText,
-                error: errorText
-            });
-            throw new Error(`地理编码请求失败: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
         // console.log('地理编码响应数据:', data);
 
         if (!data || !data.results) {
@@ -60,6 +117,7 @@ export async function geocodeAddresses(addresses, mode = 'default', locationTags
         return data;
     } catch (error) {
         console.error('地理编码过程出错:', error);
+        // The error is already a proper Error object from fetchAPI
         throw error;
     } finally {
         hideLoading();
@@ -115,12 +173,10 @@ export async function smartSelectAll(results) {
 export async function saveLocationTypeToServer(type) {
     if (!type) return;
     try {
-        const response = await fetch('/save_location_type', {
+        return await fetchAPI('/save_location_type', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type: type })
         });
-        return await response.json();
     } catch (error) {
         console.error('保存地名类型后缀失败:', error);
         throw error;
@@ -138,7 +194,10 @@ export async function exportData(format, data, locationName) {
     try {
         const response = await fetch(ENDPOINTS.export, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
             body: JSON.stringify({
                 format: format,
                 data: data,
@@ -172,19 +231,14 @@ export async function performMapSearch(searchTerm, source = 'amap') {
     // console.log(`开始地图搜索 (源: ${source}): ${searchTerm}`);
     const endpoint = ENDPOINTS.geocodePoiSearch;
     try {
-        const response = await fetch(endpoint, {
+        const data = await fetchAPI(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 keyword: searchTerm, // The backend expects 'keyword'
                 source: source // Pass the source ('amap', 'baidu', etc.) to the backend
             })
         });
 
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.message || `HTTP error! status: ${response.status}`);
-        }
         // console.log(`地图搜索响应数据 (${source}):`, data);
         if (data.user) {
             updateUserState(data.user);
@@ -203,25 +257,30 @@ export async function performMapSearch(searchTerm, source = 'amap') {
  * @param {string} sourceContext - The source context for the search.
  * @returns {Promise<object>} The server's response with the selected point index.
  */
-export async function autoSelectPoint(pois, originalAddress, sourceContext) {
+export async function autoSelectPoint(poiResults, originalAddress, sourceContext) {
     try {
-        const response = await fetch(ENDPOINTS.geocodeAutoSelect, {
+        // console.log('[DEBUG] Calling autoSelectPoint API with:', { poiResults, originalAddress, sourceContext });
+        const response = await fetchAPI(ENDPOINTS.geocodeAutoSelect, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                poi_results: poiResults,
                 original_address: originalAddress,
-                pois: pois,
                 source_context: sourceContext
             })
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message || '自动选点请求失败');
-        if (data.user) {
-            updateUserState(data.user);
+        // console.log('[DEBUG] autoSelectPoint raw API response:', response);
+
+        if (!response.success) {
+            // Rethrow the error object to be caught by the calling function's catch block
+            const error = new Error(response.message || 'Auto select failed');
+            error.response = response; // Attach full response for more context
+            throw error;
         }
-        return data;
+        return response;
     } catch (error) {
-        console.error('自动选点失败:', error);
+        // console.error('[DEBUG] Error in autoSelectPoint API call:', error);
+        // Re-throw the error so the calling function knows the operation failed.
+        // This is crucial for the UI to react correctly (e.g., stop loading spinners).
         throw error;
     }
 }
@@ -237,13 +296,10 @@ export async function autoSelectPoint(pois, originalAddress, sourceContext) {
 export async function performSmartSearch(query, mode = 'crawl_extract') {
     showLoading('智能分析中...');
     try {
-        const response = await fetch('/smart_search', {
+        const data = await fetchAPI('/smart_search', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query, mode })
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || '智能分析请求失败');
         if (data.user) {
             updateUserState(data.user);
         }
@@ -265,20 +321,14 @@ export async function performSmartSearch(query, mode = 'crawl_extract') {
  */
 export async function reverseGeocode(lat, lng, source = 'amap') {
     try {
-        const response = await fetch(ENDPOINTS.geocodeReverse, {
+        const data = await fetchAPI(ENDPOINTS.geocodeReverse, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 lat: lat,
                 lng: lng,
                 source: source
             })
         });
-
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.message || `HTTP error! status: ${response.status}`);
-        }
 
         if (data.success) {
             return {
@@ -306,17 +356,14 @@ export async function confidenceSelectPoint(originalAddress, pois, sourceContext
     try {
         // console.log('开始置信度选点:', { originalAddress, poisCount: pois.length, sourceContext });
         
-        const response = await fetch(ENDPOINTS.geocodeConfidenceSelect, {
+        const data = await fetchAPI(ENDPOINTS.geocodeConfidenceSelect, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 original_address: originalAddress,
                 pois: pois,
                 source_context: sourceContext
             })
         });
-
-        const data = await response.json();
         // console.log('置信度选点响应:', data);
         
         return data;
@@ -337,16 +384,14 @@ export async function hybridSelectPoint(originalAddress, sourceContext = '智能
     try {
         // console.log('开始混合选点:', { originalAddress, sourceContext });
         
-        const response = await fetch(ENDPOINTS.geocodeHybridSelect, {
+        const data = await fetchAPI(ENDPOINTS.geocodeHybridSelect, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 original_address: originalAddress,
                 source_context: sourceContext
             })
         });
 
-        const data = await response.json();
         // console.log('混合选点响应:', data);
         
         return data;

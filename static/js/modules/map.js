@@ -176,10 +176,10 @@ export function updateResultsOverviewMapMarkers(map, selectedResults) {
         const container = map.getContainer && map.getContainer();
         if (container) {
             const rect = container.getBoundingClientRect();
-            console.log('[Map] container size', { width: rect.width, height: rect.height, display: container.style && container.style.display });
+            // console.log('[Map] container size', { width: rect.width, height: rect.height, display: container.style && container.style.display });
         }
     } catch (e) { console.warn('[Map] could not inspect map container', e); }
-    console.log('[Map] updateResultsOverviewMapMarkers: selectedResults=', Array.isArray(selectedResults) ? selectedResults.length : 'invalid');
+    // console.log('[Map] updateResultsOverviewMapMarkers: selectedResults=', Array.isArray(selectedResults) ? selectedResults.length : 'invalid');
     const getLatLngForOverviewMap = (item) => {
         if (!item.selected_result || !item.selected_result.result) return null;
         const result = item.selected_result.result;
@@ -215,13 +215,13 @@ export function updateResultsOverviewMapMarkers(map, selectedResults) {
             popupAnchor: [0, -14]
         });
         // 调试：记录图标HTML和类名
-        try { console.log('[Map] createIconForOverviewMap', { idx: index, className: icon.options && icon.options.className, html: icon.options && icon.options.html }); } catch (e) {}
+        // try { console.log('[Map] createIconForOverviewMap', { idx: index, className: icon.options && icon.options.className, html: icon.options && icon.options.html }); } catch (e) {}
         return icon;
     };
 
     const beforeCount = overviewMapMarkers.length;
     addMarkersToMapAndFitBounds(map, selectedResults, overviewMapMarkers, getLatLngForOverviewMap, getPopupContentForOverviewMap, createIconForOverviewMap);
-    console.log('[Map] markers before/after add:', { before: beforeCount, after: overviewMapMarkers.length });
+    // console.log('[Map] markers before/after add:', { before: beforeCount, after: overviewMapMarkers.length });
     // 额外防护：如果地图仍未正确缩放，尝试在下一个tick再次fit。
     setTimeout(() => {
         try {
@@ -229,14 +229,14 @@ export function updateResultsOverviewMapMarkers(map, selectedResults) {
             if (bounds.isValid()) {
                 map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
                 const center = map.getCenter();
-                console.log('[Map] refit done center/zoom=', { center, zoom: map.getZoom(), markers: overviewMapMarkers.length });
+                // console.log('[Map] refit done center/zoom=', { center, zoom: map.getZoom(), markers: overviewMapMarkers.length });
                 // 调试：检查第一个标记DOM可见性
                 const first = overviewMapMarkers[0];
                 if (first && first._icon) {
                     const style = window.getComputedStyle(first._icon);
-                    console.log('[Map] first marker icon computed style', { display: style.display, width: style.width, height: style.height, opacity: style.opacity, className: first._icon.className });
+                    // console.log('[Map] first marker icon computed style', { display: style.display, width: style.width, height: style.height, opacity: style.opacity, className: first._icon.className });
                 } else {
-                    console.log('[Map] first marker icon not available yet');
+                    // console.log('[Map] first marker icon not available yet');
                 }
             } else {
                 console.warn('[Map] bounds invalid');

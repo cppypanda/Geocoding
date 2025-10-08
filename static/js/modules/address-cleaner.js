@@ -1,4 +1,5 @@
 import { createAndAppendElement } from './utils.js';
+import { fetchAPI } from './api.js';
 
 /**
  * 地址清理工具
@@ -71,8 +72,7 @@ let databaseSuffixes = [];
 // 从服务器获取地名类型后缀列表
 async function fetchLocationTypeSuffixes() {
     try {
-        const response = await fetch('/get_location_types');
-        const data = await response.json();
+        const data = await fetchAPI('/get_location_types');
         if (data.success && Array.isArray(data.types)) {
             // 更新后缀列表，按长度倒序排列（先检查长的后缀）
             databaseSuffixes = data.types.sort((a, b) => b.length - a.length);
@@ -127,15 +127,11 @@ export async function saveLocationTypeSuffix(suffix) {
     if (!suffix) return;
     
     try {
-        const response = await fetch('/save_location_type', {
+        const data = await fetchAPI('/save_location_type', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
             body: JSON.stringify({ type: suffix })
         });
         
-        const data = await response.json();
         if (data.success) {
             // 如果保存成功且不在当前列表中，添加到列表
             if (!databaseSuffixes.includes(suffix)) {

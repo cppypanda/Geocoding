@@ -1,5 +1,5 @@
 // 主脚本文件 - 导入所有必要的模块
-import { updateUserBar, initializeAuthForms } from './modules/auth.js';
+import { updateUserBar, initializeAuthForms, showLoginModal } from './modules/auth.js';
 import { showToast, convertCoordinates } from './modules/utils.js';
 import { displayCascadeResults } from './modules/ui.js';
 import { initializeMap, initializeResultsOverviewMap, updateResultsOverviewMapMarkers, ensureResultsOverviewMap, ensureCalibrationMap } from './modules/map.js';
@@ -14,7 +14,7 @@ import { ENDPOINTS, SELECTORS } from './modules/constants.js';
 import { startSmartCalibration } from './modules/smart-calibration.js';
 import { initializeMapSearch, getPoiResults } from './modules/map-search.js';
 import { initializeNotifications } from './modules/notifications.js';
-import { exportData } from './modules/api.js';
+import { exportData, fetchAPI } from './modules/api.js';
 
 // 确保模块在全局可用
 window.webIntelligence = webIntelligence;
@@ -26,6 +26,7 @@ window.cleanAddressText = cleanAddressText;
 
 // 全局状态
 window.currentUser = null; // 使用 window.currentUser 确保全局可访问
+window.actionAfterLogin = null; // 用于存储登录后需要执行的操作
 let cascadeResults = [];
 let itemCalibrationMap = null;
 let calibrationPanel = null;
@@ -326,9 +327,15 @@ function initializeButtons() {
         if (wechatOrder) return wechatOrder; // 如果已为微信创建订单，直接返回
         if (!selectedPackageId) return null;
         try {
+            // 从 meta 标签获取 CSRF token
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+            
             const resp = await fetch('/create_recharge_order', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken // 添加 CSRF token
+                },
                 body: JSON.stringify({ package_id: selectedPackageId })
             });
             if (resp.status === 401) {
@@ -382,9 +389,13 @@ function initializeButtons() {
                 initiateAlipayBtn.innerHTML = '<i class="bi bi-shield-lock"></i> 正在生成安全支付链接...';
 
                 // 2. 获取支付链接
+                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
                 const paymentResp = await fetch('/initiate_payment', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken // 添加 CSRF token
+                    },
                     body: JSON.stringify({ order_number: order.order_number })
                 });
                 const paymentData = await paymentResp.json();
@@ -545,51 +556,77 @@ function initializeButtons() {
             submitFeedbackBtn.disabled = true;
             submitFeedbackBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 提交中...';
 
-            try {
-                // 先上传图片（如有）
-                let uploadedPaths = [];
-                if (feedbackImagesInput && feedbackImagesInput.files && feedbackImagesInput.files.length > 0) {
-                    const toUpload = Array.from(feedbackImagesInput.files).slice(0, 3);
-                    for (const file of toUpload) {
-                        const formData = new FormData();
-                        formData.append('image', file);
-                        const resp = await fetch(ENDPOINTS.uploadFeedbackImage, { method: 'POST', body: formData });
-                        if (!resp.ok) throw new Error('上传失败');
-                        const data = await resp.json();
-                        if (!data.success || !data.image_url) throw new Error(data.message || '上传失败');
-                        uploadedPaths.push(data.image_url);
-                    }
-                }
+            // Grab files for later background upload
+            const filesToUpload = (feedbackImagesInput && feedbackImagesInput.files && feedbackImagesInput.files.length > 0)
+                ? Array.from(feedbackImagesInput.files).slice(0, 3)
+                : [];
 
-                // 提交反馈主体
-                const payload = { feedback_text: desc, image_paths: JSON.stringify(uploadedPaths) };
+            try {
+                // Step 1: Submit the feedback text first to get an ID
+                const payload = { 
+                    feedback_text: desc,
+                    total_images: filesToUpload.length  // <<< Add this
+                };
                 const catVal = feedbackCategoryInput ? (feedbackCategoryInput.value || '').trim() : '';
                 if (catVal) payload.category = catVal;
                 const metaVal = feedbackMetadataInput ? (feedbackMetadataInput.value || '').trim() : '';
                 if (metaVal) payload.metadata = metaVal;
-                const resp = await fetch(ENDPOINTS.submitFeedback, {
+
+                const initialData = await fetchAPI(ENDPOINTS.submitFeedback, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const data = await resp.json();
-                if (!resp.ok || !data.success) {
-                    showToast(data.message || '提交失败', 'error');
-                } else {
-                    showToast(data.message || '反馈已提交', 'success');
-                    // 关闭模态并重置表单
-                    try {
-                        const modalEl = document.getElementById('feedbackModal');
-                        const modal = modalEl && (bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl));
-                        modal && modal.hide();
-                    } catch (e) {}
-                    if (feedbackForm) feedbackForm.reset();
-                    if (feedbackImagePreviewContainer) feedbackImagePreviewContainer.innerHTML = '';
-                    if (feedbackCategoryInput) feedbackCategoryInput.value = '';
-                    if (feedbackMetadataInput) feedbackMetadataInput.value = '';
+
+                if (!initialData.success) {
+                    throw new Error(initialData.message || '提交反馈文本失败');
                 }
+
+                const feedbackId = initialData.feedback_id;
+
+                // Step 2: Immediately confirm to user and reset UI
+                showToast(initialData.message || '反馈已提交，感谢您的支持！', 'success');
+                try {
+                    const modalEl = document.getElementById('feedbackModal');
+                    const modal = modalEl && (bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl));
+                    modal && modal.hide();
+                } catch (e) {}
+                if (feedbackForm) feedbackForm.reset();
+                if (feedbackImagePreviewContainer) feedbackImagePreviewContainer.innerHTML = '';
+                if (feedbackCategoryInput) feedbackCategoryInput.value = '';
+                if (feedbackMetadataInput) feedbackMetadataInput.value = '';
+
+                // Step 3: Upload images in the background (fire and forget)
+                if (filesToUpload.length > 0 && feedbackId) {
+                    
+                    const uploadFileWithRetry = async (file, feedbackId, retries = 2) => {
+                        const formData = new FormData();
+                        formData.append('image', file);
+                        formData.append('feedback_id', feedbackId);
+
+                        for (let i = 0; i <= retries; i++) {
+                            try {
+                                const uploadData = await fetchAPI(ENDPOINTS.uploadFeedbackImage, { method: 'POST', body: formData });
+                                if (uploadData.success) {
+                                    console.log(`Background image ${file.name} uploaded successfully.`);
+                                    return; // Success, exit the loop
+                                }
+                                // If server responds with success: false, treat as a failure to retry
+                                console.warn(`Attempt ${i + 1} failed for ${file.name}:`, uploadData.message);
+                            } catch (err) {
+                                console.error(`Attempt ${i + 1} threw an error for ${file.name}:`, err);
+                            }
+                        }
+                        console.error(`Failed to upload image ${file.name} after ${retries + 1} attempts.`);
+                    };
+
+                    filesToUpload.forEach(file => {
+                        // We don't await this promise, letting it run in the background.
+                        uploadFileWithRetry(file, feedbackId);
+                    });
+                }
+
             } catch (e) {
-                showToast(e.message && e.message.includes('上传失败') ? '图片上传失败，请重试' : '提交失败，请检查网络', 'error');
+                showToast(e.message || '提交失败，请检查网络', 'error');
             } finally {
                 submitFeedbackBtn.disabled = false;
                 submitFeedbackBtn.textContent = '确定';
@@ -656,9 +693,9 @@ function initializeButtons() {
                 const payload = { };
                 if (currentTaskName) payload.current_task_name = currentTaskName;
 
-                const resp = await fetch(ENDPOINTS.socialShareCopy, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                const data = await resp.json();
-                if (!resp.ok || !data.success) {
+                const data = await fetchAPI(ENDPOINTS.socialShareCopy, { method: 'POST', body: JSON.stringify(payload) });
+                
+                if (!data.success) {
                     showToast(data.message || '生成失败', 'error');
                 } else {
                     socialCopyText.value = data.copy || '';
@@ -788,20 +825,20 @@ function initializeButtons() {
     const poiMap = ensureCalibrationMap('itemCalibrationMap');
     if (poiMap) {
         initializeMapSearch(poiMap, (selectedPoi) => {
-            console.log('[DEBUG] 6. onPoiSelected回调函数在script.js中被触发，接收到选择的POI:', selectedPoi);
+            // console.log('[DEBUG] 6. onPoiSelected回调函数在script.js中被触发，接收到选择的POI:', selectedPoi);
             if (window.calibrationPanel) {
                 const allPoiResults = getPoiResults();
                 const selectedIndex = allPoiResults.findIndex(poi => poi === selectedPoi);
-                console.log('[DEBUG] 7. 在当前POI列表中重新计算选中项的索引，结果为:', selectedIndex);
+                // console.log('[DEBUG] 7. 在当前POI列表中重新计算选中项的索引，结果为:', selectedIndex);
 
                 if (selectedIndex !== -1) {
                     if (window.calibrationPanel.setMapSearchResults) {
                         window.calibrationPanel.setMapSearchResults(allPoiResults);
                     }
-                    console.log('[DEBUG] 8. 准备调用校准面板的handleMapPoiSelection方法来更新UI。');
+                    // console.log('[DEBUG] 8. 准备调用校准面板的handleMapPoiSelection方法来更新UI。');
                     window.calibrationPanel.handleMapPoiSelection(selectedIndex, '地址查找工具选定');
                 } else {
-                    console.log('[DEBUG] 8a. 错误：接收到的POI在当前列表中找不到，无法更新UI。');
+                    // console.log('[DEBUG] 8a. 错误：接收到的POI在当前列表中找不到，无法更新UI。');
                     showToast('在结果列表中未找到选定的POI', 'error');
                 }
             }
@@ -1016,12 +1053,10 @@ async function handleGeocode(mode) {
     
     if (!user) {
         showToast('请先登录后开始使用', 'warning');
+        // 设置登录后要执行的动作
+        window.actionAfterLogin = () => handleGeocode(mode);
         // 显示登录模态框
-        const loginModalElement = document.getElementById('loginRegisterModal');
-        if (loginModalElement) {
-            const loginModal = new bootstrap.Modal(loginModalElement);
-            loginModal.show();
-        }
+        showLoginModal();
         return;
     }
     

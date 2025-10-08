@@ -95,7 +95,7 @@ def initiate_payment():
             return_url=return_url,
             notify_url=notify_url
         )
-        payment_url = current_app.config['ALIPAY_GATEWAY_URL'] + "?" + order_string
+        payment_url = alipay._gateway + "?" + order_string
         return jsonify({'success': True, 'payment_url': payment_url})
     except Exception as e:
         current_app.logger.error(f"Failed to create Alipay payment URL for order {order_number}: {e}")
@@ -241,6 +241,15 @@ def admin_feedback_list():
                 item.image_paths = [item.image_paths]
         else:
             item.image_paths = []
+            
+        # Parse replies JSON
+        if item.replies_json:
+            try:
+                item.replies = json.loads(item.replies_json)
+            except json.JSONDecodeError:
+                item.replies = [] # Corrupted JSON, show empty
+        else:
+            item.replies = []
 
     return render_template('admin/feedback.html', feedback=feedback_list, status_filter=status_filter)
 
@@ -287,6 +296,17 @@ def admin_feedback_reply(feedback_id: int):
             flash('反馈不存在或无归属用户', 'danger')
             return redirect(url_for('payment_bp.admin_feedback_list'))
 
+        # Save the reply to the feedback item
+        current_replies = json.loads(feedback_item.replies_json or '[]')
+        new_reply = {
+            'message': reply_text,
+            'timestamp': datetime.utcnow().isoformat(),
+            'admin_id': current_user.id,
+            'admin_name': current_user.username or current_user.email
+        }
+        current_replies.append(new_reply)
+        feedback_item.replies_json = json.dumps(current_replies)
+
         create_notification(feedback_item.user_id, reply_text)
         
         if feedback_item.status == 'new':
@@ -305,22 +325,21 @@ def admin_feedback_reply(feedback_id: int):
 @login_required
 def admin_feedback_delete(feedback_id: int):
     if not current_user.is_admin:
-        abort(403)
+        return jsonify({'success': False, 'error': 'Forbidden'}), 403
         
     try:
         feedback_item = Feedback.query.get(feedback_id)
         if not feedback_item:
-            flash('反馈不存在或已被删除', 'warning')
-        else:
-            db.session.delete(feedback_item)
-            db.session.commit()
-            flash('反馈已成功删除', 'success')
+            return jsonify({'success': False, 'error': 'Feedback not found'}), 404
+        
+        db.session.delete(feedback_item)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Feedback deleted successfully'})
+
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"Error deleting feedback {feedback_id}: {e}")
-        flash('删除反馈时发生数据库错误', 'danger')
-        
-    return redirect(url_for('payment_bp.admin_feedback_list'))
+        return jsonify({'success': False, 'error': 'Database error during deletion'}), 500
 
 @payment_bp.route('/admin/notify', methods=['GET', 'POST'])
 @login_required

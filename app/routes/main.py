@@ -23,6 +23,34 @@ from ..services import user_service
 
 main_bp = Blueprint('main', __name__)
 
+@main_bp.route('/admin/run-migration')
+def run_migration():
+    """
+    Temporary route to run a database migration.
+    """
+    try:
+        with db.engine.connect() as connection:
+            inspector = db.inspect(db.engine)
+            columns = [col['name'] for col in inspector.get_columns('feedback')]
+            
+            messages = []
+
+            if 'replies_json' not in columns:
+                sql = "ALTER TABLE feedback ADD COLUMN replies_json TEXT"
+                connection.execute(db.text(sql))
+                messages.append("Added 'replies_json' column.")
+            
+            connection.commit()
+
+            if not messages:
+                return "Migration already complete. No changes made."
+            
+            return "<br>".join(messages)
+
+    except Exception as e:
+        return f"An error occurred: {e}"
+
+
 @main_bp.route('/')
 def index():
     """主页，直接渲染index.html，并传入充值套餐数据"""

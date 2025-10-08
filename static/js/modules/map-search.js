@@ -137,31 +137,43 @@ async function handleIntelligentSelect(addressToUse = null) {
         });
 
         const data = await autoSelectPoint(normalizedPoiResults, originalAddress, '地图搜索');
-        console.log('[DEBUG] 2. 收到API响应:', data);
+        // console.log('[DEBUG] 2. 收到API响应:', data);
 
         if (data.success && data.best_match) {
             const bestMatchIndex = data.best_match_index;
-            console.log('[DEBUG] 3. API返回成功，最佳匹配索引为:', bestMatchIndex);
+            // console.log('[DEBUG] 3. API返回成功，最佳匹配索引为:', bestMatchIndex);
 
             if (bestMatchIndex !== undefined && bestMatchIndex !== -1 && state.poiResults[bestMatchIndex]) {
                 const selectedPoi = state.poiResults[bestMatchIndex];
-                console.log('[DEBUG] 4. 在当前POI列表中找到匹配项:', selectedPoi);
+                // console.log('[DEBUG] 4. 在当前POI列表中找到匹配项:', selectedPoi);
                 
                 if (state.onPoiSelected) {
-                    console.log('[DEBUG] 5. 准备调用onPoiSelected回调函数，将选择的POI传递给主脚本处理。');
+                    // console.log('[DEBUG] 5. 准备调用onPoiSelected回调函数，将选择的POI传递给主脚本处理。');
                     state.onPoiSelected(selectedPoi);
                 }
                 showToast(`智能选择成功: ${selectedPoi.name}`, 'success');
                 
             } else {
-                console.log('[DEBUG] 4a. 错误：API返回的索引在当前POI列表中无效。');
+                // console.log('[DEBUG] 4a. 错误：API返回的索引在当前POI列表中无效。');
                 showToast('智能选择返回了有效结果，但在当前列表中找不到匹配项', 'warning');
             }
         } else {
-            showToast(data.message || '智能选择失败', 'error');
+            // This is the case where the API call was successful but the LLM decided to abstain.
+            // Check for the specific NO_HIGH_CONFIDENCE message.
+            if (data.message && data.message.includes('NO_HIGH_CONFIDENCE')) {
+                showToast('AI未能自动确定最佳匹配项，请手动选择或尝试“智能辅助校准”。', 'info');
+            } else {
+                showToast(data.message || '智能选择失败', 'error');
+            }
         }
     } catch (error) {
-        showToast('智能选择时发生网络错误', 'error');
+        // This catches network errors or if the API throws an exception.
+        // We now check if the thrown error's message is the one we want to handle gracefully.
+        if (error && error.message && error.message.includes('NO_HIGH_CONFIDENCE')) {
+            showToast('AI未能自动确定最佳匹配项，请手动选择或尝试“智能辅助校准”。', 'info');
+        } else {
+            showToast(`智能选择时发生错误: ${error.message || '未知错误'}`, 'error');
+        }
     } finally {
         if (spinner) spinner.style.display = 'none';
     }

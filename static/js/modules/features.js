@@ -147,15 +147,7 @@ export async function handleSmartSearch(event) {
     resultsWrapper.style.display = 'block';
 
     try {
-        const response = await fetch('/smart_search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ search_term: searchTerm, mode: mode })
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            throw new Error(data.error || '智能搜索失败');
-        }
+        const data = await performSmartSearch(searchTerm, mode);
         displaySmartSearchResults(data.results);
     } catch (error) {
         showToast(error.message, 'error');

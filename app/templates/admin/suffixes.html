@@ -1,0 +1,238 @@
+{% extends "admin/base.html" %}
+
+{% block title %}管理地名后缀{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <h1 class="h3 mb-4 text-gray-800">地名后缀管理</h1>
+
+    <div class="card shadow mb-4">
+        <div class="card-header py-3 d-flex justify-content-between align-items-center">
+            <h6 class="m-0 font-weight-bold text-primary">后缀列表</h6>
+            <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addSuffixModal">
+                <i class="bi bi-plus-circle"></i> 添加新后缀
+            </button>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-bordered" id="suffixesTable" width="100%" cellspacing="0">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>名称</th>
+                            <th>状态</th>
+                            <th>来源</th>
+                            <th>使用次数</th>
+                            <th>创建时间</th>
+                            <th>最后使用</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for suffix in suffixes %}
+                        <tr id="suffix-{{ suffix.id }}">
+                            <td>{{ suffix.id }}</td>
+                            <td>{{ suffix.name }}</td>
+                            <td>
+                                <select class="form-control form-control-sm status-select" data-id="{{ suffix.id }}">
+                                    <option value="pending" {% if suffix.status == 'pending' %}selected{% endif %}>待审核</option>
+                                    <option value="approved" {% if suffix.status == 'approved' %}selected{% endif %}>已批准</option>
+                                    <option value="rejected" {% if suffix.status == 'rejected' %}selected{% endif %}>已拒绝</option>
+                                </select>
+                            </td>
+                            <td>{{ suffix.source }}</td>
+                            <td>{{ suffix.usage_count }}</td>
+                            <td>{{ suffix.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>{{ suffix.last_used_at.strftime('%Y-%m-%d %H:%M') if suffix.last_used_at else 'N/A' }}</td>
+                            <td>
+                                <button class="btn btn-info btn-sm edit-btn" data-id="{{ suffix.id }}" data-name="{{ suffix.name }}" data-status="{{ suffix.status }}">
+                                    <i class="bi bi-pencil-square"></i> 编辑
+                                </button>
+                                <button class="btn btn-danger btn-sm delete-btn" data-id="{{ suffix.id }}">
+                                    <i class="bi bi-trash"></i> 删除
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Suffix Modal -->
+<div class="modal fade" id="addSuffixModal" tabindex="-1" role="dialog" aria-labelledby="addSuffixModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addSuffixModalLabel">添加新后缀</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="newSuffixName">后缀名称</label>
+                    <input type="text" class="form-control" id="newSuffixName" placeholder="例如：历史文化街区">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" id="saveNewSuffix">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Suffix Modal -->
+<div class="modal fade" id="editSuffixModal" tabindex="-1" role="dialog" aria-labelledby="editSuffixModalLabel" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editSuffixModalLabel">编辑后缀</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editSuffixId">
+                <div class="form-group">
+                    <label for="editSuffixName">后缀名称</label>
+                    <input type="text" class="form-control" id="editSuffixName">
+                </div>
+                <div class="form-group">
+                    <label for="editSuffixStatus">状态</label>
+                    <select class="form-control" id="editSuffixStatus">
+                        <option value="pending">待审核</option>
+                        <option value="approved">已批准</option>
+                        <option value="rejected">已拒绝</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" id="updateSuffixBtn">更新</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+    // Add new suffix
+    document.getElementById('saveNewSuffix').addEventListener('click', function() {
+        const name = document.getElementById('newSuffixName').value;
+        if (!name) {
+            alert('后缀名称不能为空。');
+            return;
+        }
+        fetch('{{ url_for("admin.add_suffix") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
+            body: JSON.stringify({name: name})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('添加失败: ' + data.message);
+            }
+        });
+    });
+
+    // Edit suffix (open modal)
+    document.querySelectorAll('.edit-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const id = this.dataset.id;
+            const name = this.dataset.name;
+            const status = this.dataset.status;
+            
+            document.getElementById('editSuffixId').value = id;
+            document.getElementById('editSuffixName').value = name;
+            document.getElementById('editSuffixStatus').value = status;
+            
+            $('#editSuffixModal').modal('show');
+        });
+    });
+
+    // Update suffix
+    document.getElementById('updateSuffixBtn').addEventListener('click', function() {
+        const id = document.getElementById('editSuffixId').value;
+        const name = document.getElementById('editSuffixName').value;
+        const status = document.getElementById('editSuffixStatus').value;
+
+        fetch('{{ url_for("admin.update_suffix") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
+            body: JSON.stringify({id: id, name: name, status: status})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('更新失败: ' + data.message);
+            }
+        });
+    });
+
+    // Delete suffix
+    document.querySelectorAll('.delete-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const id = this.dataset.id;
+            if (confirm('确定要删除这个后缀吗？')) {
+                fetch('{{ url_for("admin.delete_suffix") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken
+                    },
+                    body: JSON.stringify({id: id})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.getElementById('suffix-' + id).remove();
+                    } else {
+                        alert('删除失败: ' + data.message);
+                    }
+                });
+            }
+        });
+    });
+
+    // Inline status update
+    document.querySelectorAll('.status-select').forEach(select => {
+        select.addEventListener('change', function() {
+            const id = this.dataset.id;
+            const status = this.value;
+            const name = document.querySelector(`#suffix-${id} td:nth-child(2)`).textContent.trim();
+
+            fetch('{{ url_for("admin.update_suffix") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken
+                },
+                body: JSON.stringify({id: id, name: name, status: status})
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) {
+                    alert('状态更新失败: ' + data.message);
+                    location.reload(); // Revert on failure
+                }
+            });
+        });
+    });
+});
+</script>
+{% endblock %}

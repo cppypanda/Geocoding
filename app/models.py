@@ -47,6 +47,10 @@ class Feedback(db.Model):
     status = db.Column(db.String, default='new')
     category = db.Column(db.String, nullable=True)
     metadata_json = db.Column(db.Text, nullable=True) # Renamed from 'metadata' to avoid keyword conflict
+    upload_status = db.Column(db.String, default='complete') # e.g., 'pending_images', 'complete'
+    total_images = db.Column(db.Integer, default=0)
+    uploaded_images = db.Column(db.Integer, default=0)
+    replies_json = db.Column(db.Text, nullable=True) # To store a JSON list of replies
 
 class UserSavedSession(db.Model):
     __tablename__ = 'user_saved_sessions'

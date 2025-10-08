@@ -1,3 +1,5 @@
+import { fetchAPI } from './modules/api.js';
+
 // console.log("task_manager.js script loaded.");
 
 // =================================================
@@ -142,8 +144,7 @@ export function initializeTaskManager() {
      */
     async function checkCurrentUserStatus() {
         try {
-            const response = await fetch('/check_login_status');
-            const data = await response.json();
+            const data = await fetchAPI('/check_login_status');
             if (data.logged_in && data.user) {
                 window.currentUser = data.user;
                 // console.log('用户状态更新成功:', window.currentUser);
@@ -266,13 +267,11 @@ export function initializeTaskManager() {
                 }
                 
                 try {
-                    const response = await fetch(`/tasks/${currentLoadedTask.id}`, {
+                    const data = await fetchAPI(`/tasks/${currentLoadedTask.id}`, {
                         method: 'PUT',
-                        headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ result_data: extendedData })
                     });
-                    const data = await response.json();
-                    window.showToast(response.ok ? '任务更新成功！' : (data.error || '任务更新失败'), response.ok ? 'success' : 'danger');
+                    window.showToast(data.success ? '任务更新成功！' : (data.error || '任务更新失败'), data.success ? 'success' : 'danger');
                 } catch (error) {
                     console.error('更新任务失败:', error);
                     window.showToast('网络错误，更新失败', 'danger');
@@ -380,13 +379,12 @@ export function initializeTaskManager() {
                     // console.log('ℹ️ webIntelligence未初始化，跳过网络信息状态收集');
                 }
 
-                const response = await fetch('/tasks/', {
+                const data = await fetchAPI('/tasks/', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ task_name: taskName, result_data: extendedData })
                 });
-                const data = await response.json();
-                if (response.status === 201) {
+
+                if (data.success) {
                     window.showToast('任务保存成功！', 'success');
                     const saveTaskModal = getSaveTaskModal();
                     if (saveTaskModal) saveTaskModal.hide();
@@ -471,9 +469,7 @@ export function initializeTaskManager() {
         
         tasksListContainer.innerHTML = '<p class="text-center">正在加载...</p>';
         try {
-            const response = await fetch(`/tasks/?page=${page}&per_page=${per_page}`);
-            if (!response.ok) throw new Error('获取任务列表失败');
-            const tasks = await response.json();
+            const tasks = await fetchAPI(`/tasks/?page=${page}&per_page=${per_page}`);
             
             if (tasks.length === 0) {
                 // 如果不是第一页，则自动回退到上一页
@@ -528,13 +524,10 @@ export function initializeTaskManager() {
                 // 若当前页条数等于每页条数，进一步探测下一页是否存在
                 if (!isNextDisabled) {
                     try {
-                        const probeResp = await fetch(`/tasks/?page=${page + 1}&per_page=${per_page}`);
-                        if (probeResp.ok) {
-                            const probeData = await probeResp.json();
-                            if (!Array.isArray(probeData) || probeData.length === 0) {
-                                const nextLi = tasksPaginationContainer.querySelector('.tasks-next-page')?.closest('.page-item');
-                                if (nextLi) nextLi.classList.add('disabled');
-                            }
+                        const probeData = await fetchAPI(`/tasks/?page=${page + 1}&per_page=${per_page}`);
+                        if (probeData && (!Array.isArray(probeData) || probeData.length === 0)) {
+                            const nextLi = tasksPaginationContainer.querySelector('.tasks-next-page')?.closest('.page-item');
+                            if (nextLi) nextLi.classList.add('disabled');
                         }
                     } catch (e) {
                         // 探测失败时保持现状，不影响主流程
@@ -593,9 +586,7 @@ export function initializeTaskManager() {
 
     async function loadTask(taskId) {
         try {
-            const response = await fetch(`/tasks/${taskId}`);
-            if (!response.ok) throw new Error('加载失败');
-            const taskData = await response.json();
+            const taskData = await fetchAPI(`/tasks/${taskId}`);
             
             // 处理新的数据结构（包含状态信息）或旧的数据结构（只有结果）
             let resultsData;
@@ -682,11 +673,7 @@ export function initializeTaskManager() {
     
     async function deleteTask(taskId) {
         try {
-            const response = await fetch(`/tasks/${taskId}`, { method: 'DELETE' });
-            if (!response.ok) {
-                const data = await response.json();
-                throw new Error(data.error || '删除失败');
-            }
+            await fetchAPI(`/tasks/${taskId}`, { method: 'DELETE' });
             window.showToast('任务删除成功', 'success');
             fetchAndRenderTasks(1);
             if (currentLoadedTask && currentLoadedTask.id == taskId) {

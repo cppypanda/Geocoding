@@ -34,7 +34,14 @@
         <div class="card h-100 shadow-sm">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-2">
-                    <div class="text-muted small">{{ item.submitted_at }}</div>
+                    <div class="text-muted small">
+                        {{ item.submitted_at }}
+                        {% if item.upload_status == 'pending_images' %}
+                            <span class="badge bg-warning text-dark ms-2">
+                                <i class="bi bi-cloud-arrow-up"></i> 图片上传中... ({{ item.uploaded_images }}/{{ item.total_images }})
+                            </span>
+                        {% endif %}
+                    </div>
                     <span class="badge {% if item.status=='new' %}bg-secondary{% elif item.status=='in_progress' %}bg-info{% elif item.status=='resolved' %}bg-success{% else %}bg-dark{% endif %}">{{ item.status or 'new' }}</span>
                 </div>
                 <div class="mb-2">
@@ -52,28 +59,46 @@
                     {% endfor %}
                 </div>
                 {% endif %}
+
+                {% if item.replies %}
+                <hr>
+                <div class="mt-2">
+                    <h6 class="card-subtitle mb-2 text-muted">管理员回复</h6>
+                    {% for reply in item.replies %}
+                    <div class="mb-2 p-2 bg-light rounded">
+                        <p class="mb-1 small">{{ reply.message }}</p>
+                        <div class="text-end text-muted small">
+                            - {{ reply.admin_name }} at {{ reply.timestamp.split('T')[0] }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </div>
             <div class="card-footer bg-transparent">
                 <form class="d-inline" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="status" value="new"/>
                     <button type="submit" class="btn btn-sm btn-outline-secondary">未处理</button>
                 </form>
                 <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="status" value="in_progress"/>
                     <button type="submit" class="btn btn-sm btn-outline-info">处理中</button>
                 </form>
                 <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="status" value="resolved"/>
                     <button type="submit" class="btn btn-sm btn-outline-success">已解决</button>
                 </form>
                 <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_update_status', feedback_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <input type="hidden" name="status" value="archived"/>
                     <button type="submit" class="btn btn-sm btn-outline-dark">归档</button>
                 </form>
-                <form class="d-inline ms-1" method="post" action="{{ url_for('payment_bp.admin_feedback_delete', feedback_id=item.id) }}" onsubmit="return confirm('确定要删除这条反馈吗？');">
-                    <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
-                </form>
+                <button type="button" class="btn btn-sm btn-outline-danger ms-1 btn-delete-feedback" data-feedback-id="{{ item.id }}">删除</button>
                 <form class="d-inline float-end" method="post" action="{{ url_for('payment_bp.admin_feedback_reply', feedback_id=item.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                     <div class="input-group input-group-sm" style="max-width: 420px;">
                         <input type="text" name="reply" class="form-control" placeholder="输入要发送给用户的消息...">
                         <button class="btn btn-primary" type="submit"><i class="bi bi-send"></i> 发送</button>
@@ -89,5 +114,51 @@
 {% endif %}
 
 {% endblock %}
+
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+
+    document.querySelectorAll('.btn-delete-feedback').forEach(button => {
+        button.addEventListener('click', function() {
+            const feedbackId = this.dataset.feedbackId;
+            if (confirm('确定要永久删除这条反馈吗？')) {
+                fetch(`/admin/feedback/${feedbackId}/delete`, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': csrfToken,
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'Accept': 'application/json'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('服务器响应错误: ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        // Find the card and remove it
+                        this.closest('.col-12').remove();
+                        // You can add a more sophisticated notification here if you like
+                        alert('反馈已删除。');
+                    } else {
+                        alert('删除失败: ' + (data.error || '未知错误'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('删除过程中发生网络错误。');
+                });
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
+
 
 

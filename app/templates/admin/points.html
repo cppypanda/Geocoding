@@ -32,6 +32,7 @@
 <div class="card shadow-sm mb-3">
   <div class="card-body">
     <form method="post" action="{{ url_for('payment_bp.admin_points_grant') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
       <div class="row g-2 align-items-end">
         <div class="col-md-3">
           <label class="form-label">目标类型</label>

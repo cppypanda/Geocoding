@@ -7,7 +7,20 @@ let pollTimer = null;
 
 async function fetchJSON(url, options = {}) {
     try {
-        const resp = await fetch(url, options);
+        const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            ...options.headers
+        };
+
+        if (options.method && options.method.toUpperCase() !== 'GET' && csrfToken) {
+            headers['X-CSRFToken'] = csrfToken;
+        }
+
+        const finalOptions = { ...options, headers };
+        const resp = await fetch(url, finalOptions);
+
         if (resp.status === 401) {
             // 当传入 __silent401 标记时，静默处理未登录（用于后台轮询）
             if (!options.__silent401) {

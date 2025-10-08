@@ -19,6 +19,7 @@
 <div class="card shadow-sm">
     <div class="card-body">
         <form method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
             <div class="mb-3">
                 <label class="form-label">目标</label>
                 <div class="form-check">

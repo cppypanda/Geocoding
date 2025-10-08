@@ -168,9 +168,9 @@ export function clearMapSearchResults() {
 export function displayMapSearchResults(tableBody, results, originalKeyword) {
     if (!tableBody) return;
 
-    console.log("[DEBUG-UI] displayMapSearchResults called.");
+    // console.log("[DEBUG-UI] displayMapSearchResults called.");
     const titleElement = document.getElementById('poi-results-title');
-    console.log("[DEBUG-UI] Found title element:", titleElement);
+    // console.log("[DEBUG-UI] Found title element:", titleElement);
 
     // 清空现有结果
     tableBody.innerHTML = '';
@@ -183,13 +183,13 @@ export function displayMapSearchResults(tableBody, results, originalKeyword) {
         return;
     }
 
-    console.log("[DEBUG-UI] First result object:", results[0]);
+    // console.log("[DEBUG-UI] First result object:", results[0]);
     if (titleElement && results[0].source_display_name) {
         const sourceName = results[0].source_display_name;
-        console.log("[DEBUG-UI] Source name found:", sourceName);
+        // console.log("[DEBUG-UI] Source name found:", sourceName);
         titleElement.innerHTML = `地图搜索结果 <small class="text-muted"> - ${sourceName}</small>`;
     } else {
-        console.log("[DEBUG-UI] Source name NOT found or title element missing.");
+        // console.log("[DEBUG-UI] Source name NOT found or title element missing.");
     }
 
     // --- 关键修复：移除前端置信度计算 ---

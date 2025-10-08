@@ -126,7 +126,7 @@ export function formatConfidence(confidence) {
 export function logToConsole(message, level = 'info') {
     if (typeof console === 'object') {
         if (level === 'info') {
-            console.log(message);
+            // console.log(message);
         } else if (level === 'warn') {
             console.warn(message);
         } else if (level === 'error') {
@@ -296,11 +296,11 @@ export function addMarkersToMapAndFitBounds(mapInstance, dataOrPoints, markerArr
         return;
     }
     try {
-        console.log('[utils] addMarkersToMapAndFitBounds', {
+        /* console.log('[utils] addMarkersToMapAndFitBounds', {
             hasMarkerArray: Array.isArray(markerArray),
             dataType: Array.isArray(dataOrPoints) ? 'array' : typeof dataOrPoints,
             dataLength: Array.isArray(dataOrPoints) ? dataOrPoints.length : undefined
-        });
+        }); */
     } catch (e) {}
     
     // 清除现有标记 (适用于两种情况)
@@ -343,7 +343,7 @@ export function addMarkersToMapAndFitBounds(mapInstance, dataOrPoints, markerArr
             if (latLng && typeof latLng[0] === 'number' && typeof latLng[1] === 'number') {
                 const popupContent = getPopupContentFunction ? getPopupContentFunction(item) : '';
                 const icon = createIconFunction ? createIconFunction(item, index) : undefined;
-                console.log('[utils] creating marker', { index, latLng, hasIcon: !!icon, iconClass: icon && icon.options && icon.options.className });
+                // console.log('[utils] creating marker', { index, latLng, hasIcon: !!icon, iconClass: icon && icon.options && icon.options.className });
                 const marker = L.marker(latLng, { icon: icon }).bindPopup(popupContent);
                 markersToAdd.push(marker);
                 if (Array.isArray(markerArray)) markerArray.push(marker);
@@ -364,7 +364,7 @@ export function addMarkersToMapAndFitBounds(mapInstance, dataOrPoints, markerArr
         mapInstance.setView([35.86166, 104.195397], 4); // 如果没有点，则重置视图
     }
     
-    console.log('[utils] map updated with markers', { count: markersToAdd.length });
+    // console.log('[utils] map updated with markers', { count: markersToAdd.length });
 }
 
 // 新策略：前端不再声明或使用积分消耗常量
