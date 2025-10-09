@@ -39,8 +39,13 @@ sms_codes_cache = verification_codes_cache
 @auth_bp.route('/send_verification_code', methods=['POST'])
 def send_verification_code():
     data = request.json
+    if not data:
+        current_app.logger.warning("Received empty JSON for send_verification_code")
+        return jsonify({'success': False, 'message': '无效的请求'}), 400
+        
     email = data.get('email')
     purpose = data.get('purpose', 'register_login') # 'register_login', 'reset_password', 'register_or_set_password'
+    current_app.logger.info(f"send_verification_code request received for email: {email}, purpose: {purpose}")
 
     if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return jsonify({'success': False, 'message': '无效的邮箱地址'}), 400

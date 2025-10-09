@@ -15,7 +15,10 @@ class Config:
     # Read the database URL from an environment variable.
     # This will raise a KeyError if the environment variable is not set,
     # ensuring the application fails fast in case of misconfiguration.
-    SQLALCHEMY_DATABASE_URI = os.environ['DATABASE_URL']
+    db_url = os.environ['DATABASE_URL']
+    if db_url.startswith("postgres://") and "sslmode" not in db_url:
+        db_url += "?sslmode=require"
+    SQLALCHEMY_DATABASE_URI = db_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # This local folder is no longer used for uploads, but might be kept for other purposes.
@@ -132,10 +135,6 @@ class Config:
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
     }
-    _db_uri_lower = (SQLALCHEMY_DATABASE_URI or '').lower()
-    if _db_uri_lower.startswith('postgres://') or _db_uri_lower.startswith('postgresql://'):
-        # psycopg2 respects sslmode in connect args
-        SQLALCHEMY_ENGINE_OPTIONS['connect_args'] = {'sslmode': 'require'}
 
 class DevelopmentConfig(Config):
     """Development configuration."""

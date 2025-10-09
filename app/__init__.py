@@ -3,7 +3,7 @@ import logging
 from flask import Flask, request, jsonify, render_template, send_file, session, url_for
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from .config import config_by_name
 from zhipuai import ZhipuAI
 from .utils.log_context import ContextFilter
@@ -39,6 +39,15 @@ def create_app(config_name=None, config_overrides=None):
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+
+    # Handle CSRF errors with JSON for API requests
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        # If it's an AJAX/JSON request, return structured JSON to help the frontend
+        if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': f'CSRF校验失败: {e.description}'}), 400
+        # Fallback to a simple text response
+        return jsonify({'success': False, 'message': 'CSRF校验失败'}), 400
 
     if app.config.get('ZHIPUAI_KEY'):
         app.extensions['zhipuai_client'] = ZhipuAI(api_key=app.config['ZHIPUAI_KEY'])

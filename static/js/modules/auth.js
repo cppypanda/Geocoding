@@ -398,12 +398,10 @@ async function handleSendVerificationCode(event) {
     }, 1000);
 
     try {
-        const response = await fetch(ENDPOINTS.sendVerificationCode, {
+        const data = await fetchAPI(ENDPOINTS.sendVerificationCode, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, purpose }),
+            body: JSON.stringify({ email, purpose })
         });
-        const data = await response.json();
         if (!data.success) {
             showToast(data.message || '发送失败', 'error');
             clearInterval(interval);
@@ -413,7 +411,7 @@ async function handleSendVerificationCode(event) {
             showToast(data.message || '验证码已发送', 'success');
         }
     } catch (error) {
-        showToast('发送验证码请求失败', 'error');
+        showToast(error.message || '发送验证码请求失败', 'error');
         clearInterval(interval);
         button.textContent = originalText;
         button.disabled = false;
