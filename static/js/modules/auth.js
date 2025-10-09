@@ -278,12 +278,10 @@ async function handleEmailLoginRegister(event) {
     }
 
     try {
-        const response = await fetch(ENDPOINTS.loginRegisterEmail, {
+        const data = await fetchAPI(ENDPOINTS.loginRegisterEmail, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, code }),
+            body: JSON.stringify({ email, code })
         });
-        const data = await response.json();
         if (data.success) {
             showToast(data.message || '操作成功', 'success');
             updateUserBar(data.user);
@@ -342,12 +340,10 @@ async function handleRegisterSetPassword(event) {
     }
     
     try {
-        const response = await fetch(ENDPOINTS.registerSetPassword, {
+        const data = await fetchAPI(ENDPOINTS.registerSetPassword, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, code, password, username: email.split('@')[0] }), // Default username from email
+            body: JSON.stringify({ email, code, password, username: email.split('@')[0] }) // Default username from email
         });
-        const data = await response.json();
         if (data.success) {
             showToast(data.message || '注册成功', 'success');
             updateUserBar(data.user);
@@ -357,7 +353,7 @@ async function handleRegisterSetPassword(event) {
             showToast(data.message || '注册失败', 'error');
         }
     } catch (error) {
-        showToast('注册过程中发生错误', 'error');
+        showToast(error.message || '注册过程中发生错误', 'error');
     }
 }
 
@@ -578,12 +574,10 @@ async function handleResetPassword(event) {
     }
 
     try {
-        const response = await fetch(ENDPOINTS.resetPassword, {
+        const data = await fetchAPI(ENDPOINTS.resetPassword, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, code, new_password }),
+            body: JSON.stringify({ email, code, new_password })
         });
-        const data = await response.json();
         if (data.success) {
             showToast('密码重置成功', 'success');
             const forgotPasswordModal = bootstrap.Modal.getInstance(document.getElementById('forgotPasswordModal'));
@@ -593,7 +587,7 @@ async function handleResetPassword(event) {
             showToast(data.message || '密码重置失败', 'error');
         }
     } catch (error) {
-        showToast('密码重置过程中发生错误', 'error');
+        showToast(error.message || '密码重置过程中发生错误', 'error');
     }
 }
 
@@ -864,23 +858,14 @@ async function handleSaveApiKeys() {
         if (!serviceName || !apiKey) continue; // 空值跳过，不做清空逻辑
 
         try {
-            const resp = await fetch(ENDPOINTS.userKeys, {
+            const data = await fetchAPI(ENDPOINTS.userKeys, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ service_name: serviceName, api_key: apiKey })
             });
-
-            if (resp.status === 401) {
-                showToast('请先登录后再保存 Key', 'warning');
-                break;
-            }
-
-            const data = await resp.json();
-            if (!resp.ok || !data.success) {
-                showToast(data.message || `${serviceName} Key 保存失败`, 'error');
+            if (!data || !data.success) {
+                showToast((data && data.message) || `${serviceName} Key 保存失败`, 'error');
                 continue;
             }
-
             anySuccess = true;
             const awarded = Number(data.points_awarded || 0) || 0;
             awardedPointsTotal += awarded;

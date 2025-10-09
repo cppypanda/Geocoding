@@ -2,8 +2,6 @@ import { showLoading, hideLoading, showToast } from './utils.js';
 import { ENDPOINTS } from './constants.js';
 import { updateUserBar } from './auth.js';
 
-const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
 /**
  * A wrapper for the native fetch API.
  * @param {string} url - The URL to fetch.
@@ -11,8 +9,13 @@ const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute
  * @returns {Promise<object>} - A promise that resolves with the JSON response.
  */
 export async function fetchAPI(url, options = {}) {
+    // Get CSRF token dynamically on each request to avoid cache issues
+    const csrfTokenElement = document.querySelector('meta[name="csrf-token"]');
+    const csrfToken = csrfTokenElement ? csrfTokenElement.getAttribute('content') : '';
+    
     const defaultHeaders = {
         'Accept': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest', // Mark as AJAX request
     };
 
     // Add Content-Type only if body is not FormData
@@ -21,7 +24,7 @@ export async function fetchAPI(url, options = {}) {
     }
 
     // Add CSRF token to non-GET requests
-    if (options.method && options.method.toUpperCase() !== 'GET') {
+    if (options.method && options.method.toUpperCase() !== 'GET' && csrfToken) {
         defaultHeaders['X-CSRFToken'] = csrfToken;
     }
 
@@ -192,11 +195,16 @@ export async function saveLocationTypeToServer(type) {
  */
 export async function exportData(format, data, locationName) {
     try {
+        // Get CSRF token dynamically
+        const csrfTokenElement = document.querySelector('meta[name="csrf-token"]');
+        const csrfToken = csrfTokenElement ? csrfTokenElement.getAttribute('content') : '';
+        
         const response = await fetch(ENDPOINTS.export, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-CSRFToken': csrfToken
+                'X-CSRFToken': csrfToken,
+                'X-Requested-With': 'XMLHttpRequest'
             },
             body: JSON.stringify({
                 format: format,
