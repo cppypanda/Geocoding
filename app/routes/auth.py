@@ -178,25 +178,55 @@ def register_set_password():
     # 兼容用户在“邮箱登录”入口获取验证码后切到“注册/设置密码”入口提交的情况
     primary_key = f"{email}_register_or_set_password"
     fallback_key = f"{email}_register_login"
-    cached_data = verification_codes_cache.get(primary_key) or verification_codes_cache.get(fallback_key)
-    used_key = primary_key if verification_codes_cache.get(primary_key) else (fallback_key if verification_codes_cache.get(fallback_key) else None)
-    if not cached_data:
+
+    now_ts = time.time()
+    primary_data = verification_codes_cache.get(primary_key)
+    fallback_data = verification_codes_cache.get(fallback_key)
+
+    if not primary_data and not fallback_data:
         return jsonify({'success': False, 'message': '请先获取验证码'}), 400
 
-    correct_code, timestamp, _ = cached_data
-    is_expired = time.time() - timestamp > 300
-    if is_expired or code != correct_code:
-        message = '验证码已过期' if is_expired else '验证码错误'
-        try:
-            if is_expired and used_key and used_key in verification_codes_cache:
-                del verification_codes_cache[used_key]
-        except Exception:
-            pass
-        return jsonify({'success': False, 'message': message}), 400
-    
+    # 构造候选集合，并判断是否匹配输入验证码
+    candidates = []
+    if primary_data:
+        candidates.append((primary_key, primary_data))
+    if fallback_data:
+        candidates.append((fallback_key, fallback_data))
+
+    # 先检测是否有过期项（用于必要时清理）
+    any_not_expired = False
+    matched_key = None
+    for k, v in candidates:
+        correct_code, ts, _p = v
+        is_expired = (now_ts - ts) > 300
+        if not is_expired:
+            any_not_expired = True
+            if code == correct_code:
+                matched_key = k
+                break
+
+    if matched_key is None:
+        # 若没有未过期匹配项：区分“全部过期”与“存在但不匹配”
+        if not any_not_expired:
+            # 清理已过期的验证码
+            try:
+                if primary_data and primary_key in verification_codes_cache:
+                    del verification_codes_cache[primary_key]
+            except Exception:
+                pass
+            try:
+                if fallback_data and fallback_key in verification_codes_cache:
+                    del verification_codes_cache[fallback_key]
+            except Exception:
+                pass
+            return jsonify({'success': False, 'message': '验证码已过期'}), 400
+        else:
+            return jsonify({'success': False, 'message': '验证码错误'}), 400
+
+    # 使用并清理已匹配的验证码
     try:
-        if used_key and used_key in verification_codes_cache:
-            del verification_codes_cache[used_key]
+        if matched_key in verification_codes_cache:
+            del verification_codes_cache[matched_key]
     except Exception:
         pass
 
