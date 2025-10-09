@@ -175,19 +175,30 @@ def register_set_password():
     if len(password) < 6:
         return jsonify({'success': False, 'message': '密码长度至少为6位'}), 400
 
-    cache_key = f"{email}_register_or_set_password"
-    cached_data = verification_codes_cache.get(cache_key)
+    # 兼容用户在“邮箱登录”入口获取验证码后切到“注册/设置密码”入口提交的情况
+    primary_key = f"{email}_register_or_set_password"
+    fallback_key = f"{email}_register_login"
+    cached_data = verification_codes_cache.get(primary_key) or verification_codes_cache.get(fallback_key)
+    used_key = primary_key if verification_codes_cache.get(primary_key) else (fallback_key if verification_codes_cache.get(fallback_key) else None)
     if not cached_data:
         return jsonify({'success': False, 'message': '请先获取验证码'}), 400
 
     correct_code, timestamp, _ = cached_data
-    if time.time() - timestamp > 300 or code != correct_code:
-        message = '验证码已过期' if time.time() - timestamp > 300 else '验证码错误'
-        if time.time() - timestamp > 300 and cache_key in verification_codes_cache:
-            del verification_codes_cache[cache_key]
+    is_expired = time.time() - timestamp > 300
+    if is_expired or code != correct_code:
+        message = '验证码已过期' if is_expired else '验证码错误'
+        try:
+            if is_expired and used_key and used_key in verification_codes_cache:
+                del verification_codes_cache[used_key]
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': message}), 400
     
-    del verification_codes_cache[cache_key]
+    try:
+        if used_key and used_key in verification_codes_cache:
+            del verification_codes_cache[used_key]
+    except Exception:
+        pass
 
     user = user_service.get_user_by_email(email)
 
