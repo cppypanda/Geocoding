@@ -6,7 +6,7 @@ from flask import current_app
 from sqlalchemy import or_
 
 from .. import db
-from ..models import User
+from ..models import User, BonusRewardLog
 
 def get_user_by_username(username):
     """Gets a user by their username."""
@@ -40,7 +40,9 @@ def create_user_with_password(username, password, email):
         return None
     
     hashed_password = generate_password_hash(password)
-    points = current_app.config.get('NEW_USER_REWARD_POINTS', 100)
+    # Determine whether this email has already received the new user reward
+    existing_reward_log = BonusRewardLog.query.filter_by(email=email).first()
+    points = 0 if existing_reward_log else current_app.config.get('NEW_USER_REWARD_POINTS', 100)
     
     new_user = User(
         username=username,
@@ -53,6 +55,9 @@ def create_user_with_password(username, password, email):
     
     try:
         db.session.add(new_user)
+        # Record that this email has received the new user reward, if not already recorded
+        if points > 0 and not existing_reward_log:
+            db.session.add(BonusRewardLog(email=email))
         db.session.commit()
         return new_user
     except Exception as e:
@@ -65,7 +70,9 @@ def create_user_for_email_login(email):
     if get_user_by_email(email):
         return None
         
-    points = current_app.config.get('NEW_USER_REWARD_POINTS', 100)
+    # Determine whether this email has already received the new user reward
+    existing_reward_log = BonusRewardLog.query.filter_by(email=email).first()
+    points = 0 if existing_reward_log else current_app.config.get('NEW_USER_REWARD_POINTS', 100)
     
     new_user = User(
         email=email,
@@ -78,6 +85,9 @@ def create_user_for_email_login(email):
     
     try:
         db.session.add(new_user)
+        # Record that this email has received the new user reward, if not already recorded
+        if points > 0 and not existing_reward_log:
+            db.session.add(BonusRewardLog(email=email))
         db.session.commit()
         return new_user
     except Exception as e:

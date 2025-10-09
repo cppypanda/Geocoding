@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, render_template, send_file, session, 
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_migrate import Migrate
 from .config import config_by_name
 from zhipuai import ZhipuAI
 from .utils.log_context import ContextFilter
@@ -12,6 +13,7 @@ from .utils.log_context import ContextFilter
 db = SQLAlchemy()
 login_manager = LoginManager()
 csrf = CSRFProtect()
+migrate = Migrate()
 # Redirect users to the main page to log in if they try to access a protected page
 login_manager.login_view = 'main.index'
 
@@ -39,6 +41,7 @@ def create_app(config_name=None, config_overrides=None):
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+    migrate.init_app(app, db)
 
     # Handle CSRF errors with JSON for API requests
     @app.errorhandler(CSRFError)
@@ -57,7 +60,7 @@ def create_app(config_name=None, config_overrides=None):
     with app.app_context():
         # This will create tables from your models if they don't exist
         from . import models
-        db.create_all()
+        # db.create_all() # We will use migrations instead
 
         @login_manager.user_loader
         def load_user(user_id):

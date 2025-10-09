@@ -142,3 +142,9 @@ class ApiRequestLog(db.Model):
     request_count = db.Column(db.Integer, default=0)
 
     __table_args__ = (db.UniqueConstraint('user_id', 'service_name', 'request_date', name='_user_service_date_uc'),)
+
+class BonusRewardLog(db.Model):
+    __tablename__ = 'bonus_reward_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String, unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

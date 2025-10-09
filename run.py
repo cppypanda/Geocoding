@@ -1,6 +1,12 @@
+import os
 from app import create_app
 
-app = create_app('production')
+# Fallback to development when running CLI if DATABASE_URL missing
+default_config = 'production'
+if not os.environ.get('DATABASE_URL'):
+    default_config = 'development'
+
+app = create_app(default_config)
 
 if __name__ == '__main__':
     # 在生产环境中，应该通过 Gunicorn 等 WSGI 服务器启动，而不是 app.run()

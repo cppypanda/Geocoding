@@ -1,8 +1,9 @@
 import os
-from dotenv import load_dotenv
-
-# 加载环境变量
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -15,7 +16,10 @@ class Config:
     # Read the database URL from an environment variable.
     # This will raise a KeyError if the environment variable is not set,
     # ensuring the application fails fast in case of misconfiguration.
-    db_url = os.environ['DATABASE_URL']
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        # Local fallback for CLI/migrations if DATABASE_URL is not set
+        db_url = 'sqlite:///' + os.path.join(_PROJECT_ROOT, 'app.db')
     if db_url.startswith("postgres://") and "sslmode" not in db_url:
         db_url += "?sslmode=require"
     SQLALCHEMY_DATABASE_URI = db_url
@@ -141,7 +145,7 @@ class DevelopmentConfig(Config):
     DEBUG = True
     # In development, prioritize DEV_DATABASE_URL, but fall back to the main DATABASE_URL.
     # The SQLite fallback is removed to enforce PostgreSQL usage across all environments.
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL', os.environ.get('DATABASE_URL'))
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL', os.environ.get('DATABASE_URL', Config.SQLALCHEMY_DATABASE_URI))
     ALIPAY_DEBUG = True
 
 class ProductionConfig(Config):
