@@ -210,7 +210,7 @@ export async function handleLogout(event) {
 export async function handleDeleteAccount(event) {
     if (event) event.preventDefault();
     try {
-        const confirmed = window.confirm('确认永久注销账户吗？此操作不可恢复。');
+        const confirmed = window.confirm('确认永久注销账户吗？此操作不可恢复，积分余额将清零且无法恢复。');
         if (!confirmed) return;
 
         const csrfMeta = document.querySelector('meta[name="csrf-token"]');
