@@ -205,6 +205,38 @@ export async function handleLogout(event) {
 }
 
 /**
+ * Handles delete account action from settings.
+ */
+export async function handleDeleteAccount(event) {
+    if (event) event.preventDefault();
+    try {
+        const confirmed = window.confirm('确认永久注销账户吗？此操作不可恢复。');
+        if (!confirmed) return;
+
+        const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+        const csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
+        const resp = await fetch(ENDPOINTS.deleteAccount, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken
+            },
+            body: JSON.stringify({})
+        });
+        const data = await resp.json();
+        if (resp.ok && data && data.success) {
+            updateUserBar(null);
+            showToast(data.message || '账户已注销', 'success');
+            setTimeout(() => window.location.reload(), 400);
+        } else {
+            showToast((data && data.message) || '注销失败', 'error');
+        }
+    } catch (e) {
+        showToast('注销请求失败', 'error');
+    }
+}
+
+/**
  * Handles the account login form submission.
  */
 async function handleAccountLogin(event) {
@@ -516,6 +548,9 @@ export function initializeAuthForms() {
 
     // 修改密码按钮
     document.getElementById('changePasswordBtn')?.addEventListener('click', handleChangePassword);
+
+    // 注销账户按钮
+    document.getElementById('deleteAccountBtn')?.addEventListener('click', handleDeleteAccount);
 
     // API Keys 面板：保存按钮
     document.getElementById('saveApiKeysBtn')?.addEventListener('click', handleSaveApiKeys);

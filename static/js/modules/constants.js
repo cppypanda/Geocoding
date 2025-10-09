@@ -9,6 +9,7 @@ export const ENDPOINTS = {
     registerSetPassword: '/register_set_password',
     resetPassword: '/reset_password',
     changePassword: '/change_password',
+    deleteAccount: '/user/delete_account',
 
     geocodeProcess: '/geocode/process',
     geocodePoiSearch: '/geocode/poi_search',

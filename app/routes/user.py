@@ -15,6 +15,7 @@ from ..models import (User, Feedback, GeocodingHistory, Notification,
                       UserApiKey, Referral, Task, LocationType)
 from ..services import user_service, llm_service
 from ..utils.storage import upload_file_to_r2
+from flask_login import logout_user
 
 user_bp = Blueprint('user', __name__, url_prefix='/user')
 
@@ -387,6 +388,51 @@ def mark_notifications_as_read():
         db.session.rollback()
         current_app.logger.error(f"Error marking notifications as read: {e}")
         return jsonify({'success': False, 'message': '更新通知状态失败'}), 500
+
+@user_bp.route('/delete_account', methods=['POST'])
+@login_required
+def delete_account():
+    """
+    注销当前登录账户：
+    - 仅允许当前已登录用户自行注销
+    - 级联删除与该用户相关的非关键业务数据（反馈、任务、通知、历史等）
+    - 清理用户的 API Key 与推荐关系
+    - 最后删除用户记录并执行登出
+    注意：根据业务合规需要，可改为软删除，这里实现物理删除。
+    """
+    try:
+        uid = current_user.id
+
+        # 先删除依赖数据（按外键约束顺序）
+        Notification.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        GeocodingHistory.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        Task.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        Feedback.query.filter_by(user_id=uid).delete(synchronize_session=False)
+        UserApiKey.query.filter_by(user_id=uid).delete(synchronize_session=False)
+
+        # 推荐关系：
+        Referral.query.filter_by(invitee_user_id=uid).delete(synchronize_session=False)
+        Referral.query.filter_by(referrer_user_id=uid).delete(synchronize_session=False)
+
+        # 删除用户本身
+        user = user_service.get_user_by_id(uid)
+        if not user:
+            db.session.rollback()
+            return jsonify({'success': False, 'message': '用户不存在或已删除'}), 404
+        db.session.delete(user)
+        db.session.commit()
+
+        # 提交后执行登出
+        try:
+            logout_user()
+        except Exception:
+            pass
+
+        return jsonify({'success': True, 'message': '账户已注销'}), 200
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"delete_account error: {e}")
+        return jsonify({'success': False, 'message': '注销失败，请稍后重试'}), 500
 
 @user_bp.route('/keys', methods=['GET'])
 @login_required
