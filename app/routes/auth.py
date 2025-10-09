@@ -87,6 +87,13 @@ def send_verification_code():
         return jsonify({'success': False, 'message': '邮件发送失败，请稍后再试'}), 500
 
     verification_codes_cache[cache_key] = (code, time.time(), purpose)
+    # 同步一份到用户会话，增强容错（例如进程重启/多实例）
+    try:
+        per_session_codes = session.get('verification_codes') or {}
+        per_session_codes[cache_key] = (code, time.time(), purpose)
+        session['verification_codes'] = per_session_codes
+    except Exception:
+        pass
     
     return jsonify({'success': True, 'message': '验证码已发送至您的邮箱'})
 
@@ -100,7 +107,9 @@ def login_register_email():
         return jsonify({'success': False, 'message': '邮箱和验证码不能为空'}), 400
 
     cache_key = f"{email}_register_login"
-    cached_data = verification_codes_cache.get(cache_key)
+    # 优先从用户会话中获取
+    per_session_codes = session.get('verification_codes') or {}
+    cached_data = per_session_codes.get(cache_key) or verification_codes_cache.get(cache_key)
     if not cached_data:
         return jsonify({'success': False, 'message': '请先获取验证码'}), 400
 
@@ -108,13 +117,32 @@ def login_register_email():
     if time.time() - timestamp > 300 or code != correct_code:
         if time.time() - timestamp > 300:
             message = '验证码已过期'
-            if cache_key in verification_codes_cache:
-                del verification_codes_cache[cache_key]
+            try:
+                if cache_key in verification_codes_cache:
+                    del verification_codes_cache[cache_key]
+            except Exception:
+                pass
+            try:
+                if cache_key in per_session_codes:
+                    del per_session_codes[cache_key]
+                    session['verification_codes'] = per_session_codes
+            except Exception:
+                pass
         else:
             message = '验证码错误'
         return jsonify({'success': False, 'message': message}), 400
 
-    del verification_codes_cache[cache_key]
+    try:
+        if cache_key in verification_codes_cache:
+            del verification_codes_cache[cache_key]
+    except Exception:
+        pass
+    try:
+        if cache_key in per_session_codes:
+            del per_session_codes[cache_key]
+            session['verification_codes'] = per_session_codes
+    except Exception:
+        pass
 
     user = user_service.get_user_by_email(email)
     new_user_created = False
@@ -180,8 +208,9 @@ def register_set_password():
     fallback_key = f"{email}_register_login"
 
     now_ts = time.time()
-    primary_data = verification_codes_cache.get(primary_key)
-    fallback_data = verification_codes_cache.get(fallback_key)
+    per_session_codes = session.get('verification_codes') or {}
+    primary_data = per_session_codes.get(primary_key) or verification_codes_cache.get(primary_key)
+    fallback_data = per_session_codes.get(fallback_key) or verification_codes_cache.get(fallback_key)
 
     if not primary_data and not fallback_data:
         return jsonify({'success': False, 'message': '请先获取验证码'}), 400
@@ -219,6 +248,18 @@ def register_set_password():
                     del verification_codes_cache[fallback_key]
             except Exception:
                 pass
+            try:
+                if primary_data and primary_key in per_session_codes:
+                    del per_session_codes[primary_key]
+                    session['verification_codes'] = per_session_codes
+            except Exception:
+                pass
+            try:
+                if fallback_data and fallback_key in per_session_codes:
+                    del per_session_codes[fallback_key]
+                    session['verification_codes'] = per_session_codes
+            except Exception:
+                pass
             return jsonify({'success': False, 'message': '验证码已过期'}), 400
         else:
             return jsonify({'success': False, 'message': '验证码错误'}), 400
@@ -227,6 +268,12 @@ def register_set_password():
     try:
         if matched_key in verification_codes_cache:
             del verification_codes_cache[matched_key]
+    except Exception:
+        pass
+    try:
+        if matched_key in per_session_codes:
+            del per_session_codes[matched_key]
+            session['verification_codes'] = per_session_codes
     except Exception:
         pass
 
@@ -386,18 +433,39 @@ def reset_password():
         return jsonify({'success': False, 'message': '密码长度至少为6位'}), 400
 
     cache_key = f"{email}_reset_password"
-    cached_data = verification_codes_cache.get(cache_key)
+    per_session_codes = session.get('verification_codes') or {}
+    cached_data = per_session_codes.get(cache_key) or verification_codes_cache.get(cache_key)
     if not cached_data:
         return jsonify({'success': False, 'message': '请先获取验证码'}), 400
 
     correct_code, timestamp, _ = cached_data
     if time.time() - timestamp > 300 or code != correct_code:
         message = '验证码已过期' if time.time() - timestamp > 300 else '验证码错误'
-        if time.time() - timestamp > 300 and cache_key in verification_codes_cache:
-            del verification_codes_cache[cache_key]
+        if time.time() - timestamp > 300:
+            try:
+                if cache_key in verification_codes_cache:
+                    del verification_codes_cache[cache_key]
+            except Exception:
+                pass
+            try:
+                if cache_key in per_session_codes:
+                    del per_session_codes[cache_key]
+                    session['verification_codes'] = per_session_codes
+            except Exception:
+                pass
         return jsonify({'success': False, 'message': message}), 400
 
-    del verification_codes_cache[cache_key]
+    try:
+        if cache_key in verification_codes_cache:
+            del verification_codes_cache[cache_key]
+    except Exception:
+        pass
+    try:
+        if cache_key in per_session_codes:
+            del per_session_codes[cache_key]
+            session['verification_codes'] = per_session_codes
+    except Exception:
+        pass
 
     if user_service.set_password_for_user(email, new_password):
         return jsonify({'success': True, 'message': '密码重置成功，请使用新密码登录'})

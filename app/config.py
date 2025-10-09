@@ -40,6 +40,14 @@ class Config:
     REQUIRED_CONFIDENCE_THRESHOLD = 0.9
     NO_PASSWORD_PLACEHOLDER = 'NO_PASSWORD_SMS_LOGIN'
     
+    # Session/Cookie settings (to keep session across subdomains when configured)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    # For cross-subdomain usage, set env var SESSION_COOKIE_DOMAIN like '.luwug.top'
+    SESSION_COOKIE_DOMAIN = os.environ.get('SESSION_COOKIE_DOMAIN')
+    PREFERRED_URL_SCHEME = 'https'
+    
     # SMTP 邮件服务配置
     MAIL_SERVER = os.environ.get('MAIL_SERVER')
     MAIL_PORT = int(os.environ.get('MAIL_PORT', 465))
