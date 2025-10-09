@@ -343,11 +343,19 @@ async function handleEmailLoginRegister(event) {
 async function handleRegisterSetPassword(event) {
     event.preventDefault();
     const form = event.target;
+    // 防重复提交
+    if (form && form.dataset && form.dataset.submitting === 'true') {
+        return;
+    }
+    if (form && form.dataset) {
+        form.dataset.submitting = 'true';
+    }
     const emailInput = form.querySelector('#registerEmail');
     const codeInput = form.querySelector('#registerVerificationCode');
     const passwordInput = form.querySelector('#registerPassword');
     const confirmPasswordInput = form.querySelector('#registerConfirmPassword');
     const agreeTermsCheckbox = form.querySelector('#registerAgreeTerms');
+    const submitBtn = form.querySelector('button[type="submit"]');
 
     const email = emailInput.value.trim();
     const code = codeInput.value.trim();
@@ -368,10 +376,15 @@ async function handleRegisterSetPassword(event) {
     }
     if (!agreeTermsCheckbox || !agreeTermsCheckbox.checked) {
         showToast('请阅读并同意用户服务协议和隐私政策', 'warning');
+        if (form && form.dataset) form.dataset.submitting = 'false';
         return;
     }
     
     try {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 提交中...';
+        }
         const data = await fetchAPI(ENDPOINTS.registerSetPassword, {
             method: 'POST',
             body: JSON.stringify({ email, code, password, username: email.split('@')[0] }) // Default username from email
@@ -379,13 +392,25 @@ async function handleRegisterSetPassword(event) {
         if (data.success) {
             showToast(data.message || '注册成功', 'success');
             updateUserBar(data.user);
+            // 先移除焦点，避免关闭模态时的 aria-hidden 焦点警告
+            try { document.activeElement && typeof document.activeElement.blur === 'function' && document.activeElement.blur(); } catch (e) {}
             const loginModal = bootstrap.Modal.getInstance(document.getElementById('loginRegisterModal'));
             if (loginModal) loginModal.hide();
         } else {
             showToast(data.message || '注册失败', 'error');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '提交';
+            }
+            if (form && form.dataset) form.dataset.submitting = 'false';
         }
     } catch (error) {
         showToast(error.message || '注册过程中发生错误', 'error');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '提交';
+        }
+        if (form && form.dataset) form.dataset.submitting = 'false';
     }
 }
 

@@ -203,7 +203,9 @@ def register_set_password():
     user = user_service.get_user_by_email(email)
 
     if user:
-        if user.password_hash == current_app.config['NO_PASSWORD_PLACEHOLDER']:
+        # 兼容历史占位符（如 'not_set'）
+        from ..services.user_service import is_no_password_placeholder
+        if is_no_password_placeholder(user.password_hash):
             if user_service.set_password_for_user(email, password):
                 user_service.update_user_last_login(user.id)
                 # ... (login user and return success)
@@ -452,7 +454,9 @@ def change_password():
 
     # 校验旧密码（若用户原本为验证码登录且未设置密码，则拒绝）
     password_hash = user.password_hash
-    if not password_hash or password_hash == current_app.config['NO_PASSWORD_PLACEHOLDER']:
+    # 兼容历史占位符（如 'not_set'）
+    from ..services.user_service import is_no_password_placeholder
+    if is_no_password_placeholder(password_hash):
         return jsonify({'success': False, 'message': '当前账号未设置密码，请在登录窗口使用“注册/设置密码”流程'}), 400
 
     if not check_password_hash(password_hash, old_password):

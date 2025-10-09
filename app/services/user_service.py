@@ -8,6 +8,21 @@ from sqlalchemy import or_
 from .. import db
 from ..models import User, BonusRewardLog
 
+def is_no_password_placeholder(hash_value):
+    """Returns True if the given password hash value indicates 'no password set'.
+    This is backward-compatible with legacy placeholder values such as 'not_set'.
+    """
+    try:
+        placeholder = current_app.config.get('NO_PASSWORD_PLACEHOLDER')
+    except Exception:
+        placeholder = None
+    if not hash_value:
+        return True
+    legacy_placeholders = {'not_set'}
+    if placeholder:
+        legacy_placeholders.add(placeholder)
+    return hash_value in legacy_placeholders
+
 def get_user_by_username(username):
     """Gets a user by their username."""
     return User.query.filter_by(username=username).first()
@@ -99,7 +114,7 @@ def verify_password(username_or_email, password):
     """Verifies a user's password (supports username or email)."""
     user = User.query.filter(or_(User.username == username_or_email, User.email == username_or_email)).first()
     
-    if user and user.password_hash and user.password_hash != current_app.config['NO_PASSWORD_PLACEHOLDER']:
+    if user and user.password_hash and not is_no_password_placeholder(user.password_hash):
         return check_password_hash(user.password_hash, password)
     return False
 
