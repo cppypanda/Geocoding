@@ -23,8 +23,8 @@ export async function fetchAPI(url, options = {}) {
         defaultHeaders['Content-Type'] = 'application/json';
     }
 
-    // Add CSRF token to non-GET requests
-    if (options.method && options.method.toUpperCase() !== 'GET' && csrfToken) {
+    // Always add CSRF token if it exists
+    if (csrfToken) {
         defaultHeaders['X-CSRFToken'] = csrfToken;
     }
 

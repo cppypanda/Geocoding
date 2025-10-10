@@ -5,6 +5,7 @@ from flask_login import login_required, current_user
 from datetime import datetime
 from .. import db, csrf
 from ..models import User, RechargeOrder, Notification, Feedback
+from .admin import admin_required
 
 from app.utils.alipay import get_alipay_client
 
@@ -149,11 +150,8 @@ def alipay_notify():
         return "failure", 400
 
 @payment_bp.route('/admin/orders')
-@login_required
+@admin_required
 def admin_orders():
-    if not current_user.is_admin:
-        abort(403)
-    
     status = request.args.get('status', 'ALL')
     page = request.args.get('page', 1, type=int)
     per_page = 20
@@ -168,11 +166,8 @@ def admin_orders():
     return render_template('admin/orders.html', orders_pagination=orders_pagination, selected_status=status)
 
 @payment_bp.route('/admin/orders/batch_action', methods=['POST'])
-@login_required
+@admin_required
 def admin_batch_action():
-    if not current_user.is_admin:
-        abort(403)
-
     data = request.get_json()
     order_ids = data.get('order_ids')
     action = data.get('action')
@@ -231,11 +226,8 @@ def admin_batch_action():
 
 
 @payment_bp.route('/admin/feedback')
-@login_required
+@admin_required
 def admin_feedback_list():
-    if not current_user.is_admin:
-        abort(403)
-
     status_filter = request.args.get('status')
     query = Feedback.query.join(User, Feedback.user_id == User.id).order_by(Feedback.submitted_at.desc())
 
@@ -272,11 +264,8 @@ def admin_feedback_list():
     return render_template('admin/feedback.html', feedback=feedback_list, status_filter=status_filter)
 
 @payment_bp.route('/admin/feedback/<int:feedback_id>/status', methods=['POST'])
-@login_required
+@admin_required
 def admin_feedback_update_status(feedback_id: int):
-    if not current_user.is_admin:
-        abort(403)
-
     new_status = request.form.get('status', '').strip().lower()
     if new_status not in {'new', 'in_progress', 'resolved', 'archived'}:
         flash('无效的状态值', 'danger')
@@ -298,11 +287,8 @@ def admin_feedback_update_status(feedback_id: int):
     return redirect(url_for('payment_bp.admin_feedback_list'))
 
 @payment_bp.route('/admin/feedback/<int:feedback_id>/reply', methods=['POST'])
-@login_required
+@admin_required
 def admin_feedback_reply(feedback_id: int):
-    if not current_user.is_admin:
-        abort(403)
-
     reply_text = (request.form.get('reply') or '').strip()
     if not reply_text:
         flash('回复内容不能为空', 'warning')
@@ -340,11 +326,8 @@ def admin_feedback_reply(feedback_id: int):
     return redirect(url_for('payment_bp.admin_feedback_list'))
 
 @payment_bp.route('/admin/feedback/<int:feedback_id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def admin_feedback_delete(feedback_id: int):
-    if not current_user.is_admin:
-        return jsonify({'success': False, 'error': 'Forbidden'}), 403
-        
     try:
         feedback_item = Feedback.query.get(feedback_id)
         if not feedback_item:
@@ -360,11 +343,8 @@ def admin_feedback_delete(feedback_id: int):
         return jsonify({'success': False, 'error': 'Database error during deletion'}), 500
 
 @payment_bp.route('/admin/notify', methods=['GET', 'POST'])
-@login_required
+@admin_required
 def admin_notify():
-    if not current_user.is_admin:
-        abort(403)
-
     if request.method == 'GET':
         return render_template('admin/notify.html')
 
@@ -406,11 +386,8 @@ def admin_notify():
     return redirect(url_for('payment_bp.admin_notify'))
 
 @payment_bp.route('/admin/points', methods=['GET'])
-@login_required
+@admin_required
 def admin_points():
-    if not current_user.is_admin:
-        abort(403)
-
     q = request.args.get('q', '').strip()
     query = User.query.order_by(User.created_at.desc())
 
@@ -422,11 +399,8 @@ def admin_points():
     return render_template('admin/points.html', users=users, q=q)
 
 @payment_bp.route('/admin/points/grant', methods=['POST'])
-@login_required
+@admin_required
 def admin_points_grant():
-    if not current_user.is_admin:
-        abort(403)
-
     try:
         amount = int(request.form.get('amount', '0').strip())
     except ValueError:

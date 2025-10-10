@@ -23,6 +23,15 @@ from ..services import user_service
 
 main_bp = Blueprint('main', __name__)
 
+@main_bp.route('/clear_flash_messages', methods=['POST'])
+def clear_flash_messages():
+    """Endpoint to clear flashed messages from the session."""
+    from flask import get_flashed_messages
+    # Calling this function with no arguments clears the messages from the session.
+    get_flashed_messages()
+    return jsonify({'success': True, 'message': 'Flashed messages cleared.'})
+
+
 @main_bp.route('/admin/run-migration')
 def run_migration():
     """

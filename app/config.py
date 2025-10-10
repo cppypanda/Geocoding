@@ -42,7 +42,7 @@ class Config:
     
     # Session/Cookie settings (to keep session across subdomains when configured)
     SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = False
     SESSION_COOKIE_SAMESITE = 'Lax'
     # For cross-subdomain usage, set env var SESSION_COOKIE_DOMAIN like '.luwug.top'
     SESSION_COOKIE_DOMAIN = os.environ.get('SESSION_COOKIE_DOMAIN')

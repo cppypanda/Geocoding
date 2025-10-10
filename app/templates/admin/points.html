@@ -37,9 +37,9 @@
         <div class="col-md-3">
           <label class="form-label">目标类型</label>
           <select class="form-select" name="target" id="targetSelect">
+            <option value="selected">选中列表用户</option>
             <option value="all">全部用户</option>
             <option value="emails">指定邮箱（逗号分隔）</option>
-            <option value="selected">选中列表用户</option>
           </select>
         </div>
         <div class="col-md-4" id="emailsRow" style="display:none;">
@@ -101,6 +101,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const selectedIdsInput = document.getElementById('selectedIdsInput');
   const targetSelect = document.getElementById('targetSelect');
   const emailsRow = document.getElementById('emailsRow');
+  const grantForm = document.querySelector('form[action*="admin_points_grant"]');
 
   function syncSelected() {
     const ids = checks.filter(c => c.checked).map(c => c.value);
@@ -109,6 +110,47 @@ document.addEventListener('DOMContentLoaded', function() {
   function updateTargetUi() {
     emailsRow.style.display = targetSelect.value === 'emails' ? '' : 'none';
   }
+
+  if (grantForm) {
+    grantForm.addEventListener('submit', function(event) {
+      event.preventDefault();
+      
+      syncSelected(); // Make sure the list of selected IDs is up to date.
+
+      const amountInput = grantForm.querySelector('input[name="amount"]');
+      const emailsInput = grantForm.querySelector('input[name="emails"]');
+      
+      const target = targetSelect.value;
+      const amount = amountInput.value;
+      let message = '';
+      let userCount = 0;
+
+      if (target === 'all') {
+        message = `您确定要为【全部用户】赠送 ${amount} 积分吗？`;
+      } else if (target === 'emails') {
+        const emails = emailsInput.value.split(',').filter(e => e.trim() !== '');
+        userCount = emails.length;
+        if (userCount === 0) {
+          alert('请输入至少一个邮箱地址。');
+          return;
+        }
+        message = `您确定要为 ${userCount} 个指定邮箱用户赠送 ${amount} 积分吗？`;
+      } else if (target === 'selected') {
+        const ids = selectedIdsInput.value.split(',').filter(id => id.trim() !== '');
+        userCount = ids.length;
+        if (userCount === 0) {
+          alert('请至少选择一个用户。');
+          return;
+        }
+        message = `您确定要为 ${userCount} 个选中用户赠送 ${amount} 积分吗？`;
+      }
+
+      if (message && window.confirm(message)) {
+        event.target.submit();
+      }
+    });
+  }
+
   selectAll && selectAll.addEventListener('change', function(){
     checks.forEach(c => c.checked = selectAll.checked);
     syncSelected();
