@@ -12,7 +12,6 @@ from flask_login import login_required, current_user
 from ..services import geocoding_apis, poi_search, llm_service
 from ..services.web_search_local import search_sogou
 from ..utils import geo_transforms, decorators, api_managers, address_processing
-from ..utils.auth import login_required
 from ..utils.log_context import request_context_var
 from ..models import LocationType, User, ApiRequestLog, db
 from ..services import user_service
