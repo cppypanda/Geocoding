@@ -160,6 +160,7 @@ class ProductionConfig(Config):
     """Production configuration."""
     ALIPAY_GATEWAY_URL = 'https://openapi.alipay.com/gateway.do' # 生产环境
     DEBUG = False
+    SESSION_COOKIE_SECURE = True  # Add this line
     pass
 
 config_by_name = {
