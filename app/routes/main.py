@@ -1,10 +1,10 @@
 from flask import Blueprint, render_template, session, redirect, url_for, jsonify, request, send_file, current_app
-from flask_login import current_user
+from flask_login import current_user, login_required
 from ..services import geocoding_apis
 from ..utils import address_processing
 from ..models import LocationType # Import SQLAlchemy model
 from .. import db # Import db instance
-from ..utils.auth import login_required
+# from ..utils.auth import login_required # This is replaced by flask_login's decorator
 from ..routes.geocoding import get_points_cost, deduct_points
 import json
 import jionlp as jio
