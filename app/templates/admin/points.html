@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3">积分管理</h1>
+    <h1 class="h3">积分管理<span class="text-muted fs-6 ms-2"> (共 {{ users|length }} / {{ total_user_count }} 位用户)</span></h1>
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     <div class="ms-3">
@@ -85,8 +85,8 @@
           <td>{{ u.email }}</td>
           <td>{{ u.username or '-' }}</td>
           <td>{{ u.points or 0 }}</td>
-          <td>{{ u.last_login_at or '-' }}</td>
-          <td>{{ u.created_at or '-' }}</td>
+          <td>{{ (u.last_login_at | to_beijing_time) or '-' }}</td>
+          <td>{{ (u.created_at | to_beijing_time) or '-' }}</td>
         </tr>
         {% endfor %}
       </tbody>

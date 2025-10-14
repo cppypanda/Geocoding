@@ -9,6 +9,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix  # Import ProxyFix
 from .config import config_by_name
 from zhipuai import ZhipuAI
 from .utils.log_context import ContextFilter
+from .utils.time_utils import to_beijing_time
 
 # Initialize extensions
 db = SQLAlchemy()
@@ -26,6 +27,9 @@ def create_app(config_name=None, config_overrides=None):
                 template_folder=os.path.abspath(os.path.join(os.path.dirname(__file__), 'templates')),
                 static_folder=os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'static')))
     
+    # Register custom Jinja filters
+    app.jinja_env.filters['to_beijing_time'] = to_beijing_time
+
     # Apply ProxyFix to trust headers from the reverse proxy (e.g., Render)
     # This is crucial for secure cookies to work correctly in production.
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)

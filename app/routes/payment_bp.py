@@ -396,7 +396,8 @@ def admin_points():
         query = query.filter(db.or_(User.email.like(like_pattern), User.username.like(like_pattern)))
 
     users = query.all()
-    return render_template('admin/points.html', users=users, q=q)
+    total_user_count = User.query.count()
+    return render_template('admin/points.html', users=users, q=q, total_user_count=total_user_count)
 
 @payment_bp.route('/admin/points/grant', methods=['POST'])
 @admin_required
