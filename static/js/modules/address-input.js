@@ -156,7 +156,7 @@ function autoSplitAddresses() {
     
     // 获取分隔符，默认使用中文逗号、英文逗号、顿号和分号
     const delimiters = splitDelimitersInput ? splitDelimitersInput.value.trim() : '，,、;';
-    const delimiterArray = delimiters.split(/[,，]/).map(d => d.trim()).filter(d => d);
+    const delimiterArray = delimiters.split('').map(d => d.trim()).filter(d => d);
     
     if (delimiterArray.length === 0) {
         showToast('请至少设置一个分隔符', 'warning');
