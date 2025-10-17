@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
-from ..models import LocationType, User
+from ..models import LocationType, User, GeocodingTask, AddressLog
 from .. import db
 from functools import wraps
 
@@ -102,3 +102,24 @@ def delete_suffix():
     db.session.delete(suffix)
     db.session.commit()
     return jsonify({'success': True, 'message': '后缀删除成功。'})
+
+@admin_bp.route('/geocoding_logs')
+@admin_required
+def geocoding_logs():
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    tasks_pagination = GeocodingTask.query.order_by(GeocodingTask.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return render_template('admin/geocoding_logs.html', tasks_pagination=tasks_pagination)
+
+@admin_bp.route('/geocoding_logs/<int:task_id>')
+@admin_required
+def geocoding_log_details(task_id):
+    task = GeocodingTask.query.get_or_404(task_id)
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+    addresses_pagination = AddressLog.query.filter_by(task_id=task.id).order_by(AddressLog.id.asc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return render_template('admin/geocoding_log_details.html', task=task, addresses_pagination=addresses_pagination)

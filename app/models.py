@@ -35,6 +35,7 @@ class User(UserMixin, db.Model):
     tasks = db.relationship('Task', backref='user', lazy=True)
     api_keys = db.relationship('UserApiKey', backref='user', lazy=True)
     recharge_orders = db.relationship('RechargeOrder', backref='user', lazy=True)
+    geocoding_tasks = db.relationship('GeocodingTask', backref='user', lazy=True)
 
 class Feedback(db.Model):
     __tablename__ = 'feedback'
@@ -147,4 +148,22 @@ class BonusRewardLog(db.Model):
     __tablename__ = 'bonus_reward_logs'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String, unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class GeocodingTask(db.Model):
+    __tablename__ = 'geocoding_tasks'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    task_name = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    # Relationship to AddressLog
+    addresses = db.relationship('AddressLog', backref='task', lazy=True, cascade="all, delete-orphan")
+
+class AddressLog(db.Model):
+    __tablename__ = 'address_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('geocoding_tasks.id'), nullable=False, index=True)
+    address_keyword = db.Column(db.String(512), nullable=False)
+    confidence = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

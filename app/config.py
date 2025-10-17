@@ -151,6 +151,10 @@ class Config:
 class DevelopmentConfig(Config):
     """Development configuration."""
     DEBUG = True
+    SESSION_COOKIE_SECURE = False # Ensure cookies are sent over HTTP for local dev
+    SESSION_COOKIE_DOMAIN = None    # Allow cookies on IP addresses/localhost for dev
+    PREFERRED_URL_SCHEME = 'http'   # Use http for url_for in local dev
+
     # In development, prioritize DEV_DATABASE_URL, but fall back to the main DATABASE_URL.
     # The SQLite fallback is removed to enforce PostgreSQL usage across all environments.
     SQLALCHEMY_DATABASE_URI = os.environ.get('DEV_DATABASE_URL', os.environ.get('DATABASE_URL', Config.SQLALCHEMY_DATABASE_URI))

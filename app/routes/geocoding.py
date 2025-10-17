@@ -13,7 +13,7 @@ from ..services import geocoding_apis, poi_search, llm_service
 from ..services.web_search_local import search_sogou
 from ..utils import geo_transforms, decorators, api_managers, address_processing
 from ..utils.log_context import request_context_var
-from ..models import LocationType, User, ApiRequestLog, db
+from ..models import LocationType, User, ApiRequestLog, db, GeocodingTask, AddressLog
 from ..services import user_service
 
 geocoding_bp = Blueprint('geocoding', __name__, url_prefix='/geocode')
@@ -368,6 +368,24 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
             'error': f"语义分析失败: {str(e)}"
         }
 
+    # --- Start of Logging ---
+    # 1. Create a GeocodingTask record for this batch job.
+    log_task = None
+    if user_id:
+        try:
+            task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            log_task = GeocodingTask(
+                user_id=user_id,
+                task_name=task_name
+            )
+            db.session.add(log_task)
+            db.session.flush()  # Use flush to get the ID before full commit
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Failed to create GeocodingTask for user {user_id}: {e}")
+            log_task = None # Ensure task is None if creation fails
+    # --- End of Preliminary Logging ---
+
     # Address-level parallel processing
     tasks = []
     total_addresses = len(pre_processed_data)
@@ -451,6 +469,34 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
             response_data['debug'] = [r.get('debug') for r in processed_results if isinstance(r, dict) and r.get('debug')]
         except Exception:
             pass
+            
+    # --- Start of Detailed Logging ---
+    # 2. Log each address result to the AddressLog table.
+    if log_task: # Only proceed if the parent task was created successfully
+        try:
+            logs_to_add = []
+            for result_item in all_results_for_frontend:
+                original_address = result_item.get('address')
+                selected_result = result_item.get('selected_result', {})
+                confidence = selected_result.get('confidence')
+
+                if original_address:
+                    log_entry = AddressLog(
+                        task_id=log_task.id,
+                        address_keyword=original_address,
+                        confidence=confidence
+                    )
+                    logs_to_add.append(log_entry)
+            
+            if logs_to_add:
+                db.session.bulk_save_objects(logs_to_add)
+            
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f"Failed to save AddressLog entries for task_id {log_task.id}: {e}")
+    # --- End of Detailed Logging ---
+
     return response_data
 
 @geocoding_bp.route('/process', methods=['POST'])

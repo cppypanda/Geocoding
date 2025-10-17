@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+
+{% block title %}地理编码日志 - {{ super() }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>地理编码任务日志</h2>
+    <p>这里记录了用户发起的地理编码任务。</p>
+
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th scope="col">任务ID</th>
+                    <th scope="col">任务名称</th>
+                    <th scope="col">用户ID</th>
+                    <th scope="col">用户邮箱</th>
+                    <th scope="col">创建时间</th>
+                    <th scope="col">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for task in tasks_pagination.items %}
+                <tr>
+                    <td>{{ task.id }}</td>
+                    <td>{{ task.task_name }}</td>
+                    <td>{{ task.user_id }}</td>
+                    <td>{{ task.user.email if task.user else 'N/A' }}</td>
+                    <td>{{ task.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        <a href="{{ url_for('admin.geocoding_log_details', task_id=task.id) }}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-list-ul"></i> 查看详情
+                        </a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center">没有找到任何任务记录。</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <nav aria-label="Page navigation">
+        <ul class="pagination justify-content-center">
+            {% if tasks_pagination.has_prev %}
+                <li class="page-item"><a class="page-link" href="{{ url_for('admin.geocoding_logs', page=tasks_pagination.prev_num) }}">上一页</a></li>
+            {% else %}
+                <li class="page-item disabled"><a class="page-link" href="#">上一页</a></li>
+            {% endif %}
+
+            {% for page_num in tasks_pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                {% if page_num %}
+                    {% if tasks_pagination.page == page_num %}
+                        <li class="page-item active"><a class="page-link" href="#">{{ page_num }}</a></li>
+                    {% else %}
+                        <li class="page-item"><a class="page-link" href="{{ url_for('admin.geocoding_logs', page=page_num) }}">{{ page_num }}</a></li>
+                    {% endif %}
+                {% else %}
+                    <li class="page-item disabled"><a class="page-link" href="#">&hellip;</a></li>
+                {% endif %}
+            {% endfor %}
+
+            {% if tasks_pagination.has_next %}
+                <li class="page-item"><a class="page-link" href="{{ url_for('admin.geocoding_logs', page=tasks_pagination.next_num) }}">下一页</a></li>
+            {% else %}
+                <li class="page-item disabled"><a class="page-link" href="#">下一页</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+</div>
+{% endblock %}
