@@ -6,7 +6,7 @@ from flask import current_app
 from sqlalchemy import or_
 
 from .. import db
-from ..models import User, BonusRewardLog
+from ..models import User, BonusRewardLog, Notification
 
 def is_no_password_placeholder(hash_value):
     """Returns True if the given password hash value indicates 'no password set'.
@@ -187,4 +187,24 @@ def update_admin_status(user, is_admin):
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Error updating admin status for user {user.id}: {e}") 
+        current_app.logger.error(f"Error updating admin status for user {user.id}: {e}")
+
+def create_notification(user_id, message, link=None):
+    """Creates a notification for a specific user."""
+    if not user_id or not message:
+        return False
+    
+    notification = Notification(
+        user_id=user_id,
+        message=message,
+        link=link
+    )
+    
+    try:
+        db.session.add(notification)
+        db.session.commit()
+        return True
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error creating notification for user {user_id}: {e}")
+        return False 

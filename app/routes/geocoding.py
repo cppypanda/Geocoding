@@ -373,13 +373,21 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
     log_task = None
     if user_id:
         try:
-            task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            log_task = GeocodingTask(
-                user_id=user_id,
-                task_name=task_name
-            )
-            db.session.add(log_task)
-            db.session.flush()  # Use flush to get the ID before full commit
+            user = User.query.get(user_id)
+            is_admin = user.is_admin if user else False
+
+            # Do not log tasks for admin users
+            if is_admin:
+                current_app.logger.info(f"User {user_id} is an admin, skipping task logging.")
+                log_task = None
+            else:
+                task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                log_task = GeocodingTask(
+                    user_id=user_id,
+                    task_name=task_name
+                )
+                db.session.add(log_task)
+                db.session.flush()  # Use flush to get the ID before full commit
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f"Failed to create GeocodingTask for user {user_id}: {e}")

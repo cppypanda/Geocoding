@@ -153,6 +153,11 @@ def login_register_email():
             return jsonify({'success': False, 'message': '创建新用户失败'}), 500
         new_user_created = True
 
+        # 为新用户发送欢迎通知
+        if new_user_created:
+            welcome_message = "欢迎您加入陆梧GeoCo！我们致力于为您提供智能、精准的地理编码服务。为了帮助您快速上手，这里有一个核心技巧：本工具支持批量地址处理，您只需将地址“每行一个”粘贴到输入框，即可轻松处理大量数据。更多高级功能，请随时查阅右上角用户菜单里的“使用教程”。祝您使用愉快！"
+            user_service.create_notification(user.id, welcome_message)
+
     login_user(user, remember=True)
     user_service.update_user_last_login(user.id)
     _check_and_sync_admin_status(user)
