@@ -647,15 +647,27 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body px-4 pt-2 pb-4">
+                    <div class="alert alert-danger text-center mb-3 p-2" role="alert">
+                        <i class="bi bi-fire me-1"></i> <strong>活动期间，积分翻倍！</strong> <i class="bi bi-fire ms-1"></i>
+                    </div>
                     <h6 class="mb-3">1. 请选择充值套餐</h6>
                     <div class="row" id="rechargePackageList">
                         {% if packages %}
                             {% for key, package in packages.items() %}
                             <div class="col-md-4 mb-3">
-                                <div class="recharge-package-card card-clickable" data-package-id="{{ key }}">
-                                    <div style="font-size: 1.8rem; font-weight: bold; color: #0d6efd;">{{ package.points }} <small>积分</small></div>
-                                    <div style="font-size: 1.5rem; color: #dc3545; font-weight: 500;">¥{{ "%.2f"|format(package.price) }}</div>
+                                <div class="recharge-package-card card-clickable position-relative" data-package-id="{{ key }}">
+                                    <div style="font-size: 1.8rem; font-weight: bold; color: #0d6efd;">
+                                        {{ package.points }} <small>积分</small>
+                                    </div>
+                                    <div class="text-muted text-decoration-line-through" style="font-size: 0.9rem; margin-top: -5px;">
+                                        {{ (package.points / 2)|int }} 积分
+                                    </div>
+                                    <div class="package-real-price" style="font-size: 1.5rem; color: #dc3545; font-weight: 500;">¥{{ "%.2f"|format(package.price) }}</div>
                                     <p class="text-muted small mt-1 mb-0">{{ package.name }}</p>
+                                    <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                                        翻倍
+                                        <span class="visually-hidden">积分翻倍</span>
+                                    </span>
                                 </div>
                             </div>
                             {% endfor %}
@@ -694,9 +706,9 @@
                                     <p class="mt-3 mb-1">应付金额: <strong id="amountToPayAlipay" class="text-danger">0.00</strong> 元</p>
                                     <p class="text-muted small">选择套餐后，点击下方按钮将跳转至支付宝官方页面完成支付。</p>
                                 </div>
-                                <!-- 微信支付二维码 -->
+                                <!-- 微信/支付宝支付二维码 -->
                                 <div id="wechat-qr-area" class="text-center p-3" style="display: none;">
-                                    <img alt="微信支付二维码" id="paymentQrCode" style="width:160px; height:160px; border-radius: 8px; margin-bottom: 10px;">
+                                    <img alt="支付二维码" id="paymentQrCode" style="width:160px; height:160px; border-radius: 8px; margin-bottom: 10px;">
                                     <p class="mb-1 small">需支付: <strong id="amountToPayWechat" class="text-danger"></strong> 元</p>
                                     <div class="input-group input-group-sm">
                                         <input type="text" id="orderNumberDisplay" class="form-control" placeholder="订单号" readonly>
@@ -710,8 +722,8 @@
                 </div>
                 <div class="modal-footer border-0">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                    <button type="button" class="btn btn-primary" id="initiateAlipayBtn" disabled><i class="bi bi-shield-check"></i> 前往支付宝安全支付</button>
-                    <button type="button" class="btn btn-success" id="confirmWechatPaymentBtn" style="display: none;" disabled><i class="bi bi-check-circle"></i> 我已完成支付 (微信)</button>
+                    <button type="button" class="btn btn-primary" id="initiateAlipayBtn" disabled style="display: none;"><i class="bi bi-shield-check"></i> 前往支付宝安全支付</button>
+                    <button type="button" class="btn btn-success" id="confirmWechatPaymentBtn" style="display: none;" disabled><i class="bi bi-check-circle"></i> 我已完成支付</button>
                 </div>
             </div>
         </div>

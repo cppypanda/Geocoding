@@ -1,4 +1,6 @@
 import os
+from sqlalchemy.pool import NullPool
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -135,17 +137,21 @@ class Config:
     # ------------------------------------------------------------------------------
     # 定义用户可以购买的积分套餐，键为套餐ID，值为一个包含名称、积分和价格的字典。
     # ID建议使用 pkg_PRICE 格式，方便前端识别。
+    # 活动期间积分翻倍：原100->200, 600->1200, 1500->3000
     RECHARGE_PACKAGES = {
-        'pkg_10': {'name': '入门套餐', 'points': 100, 'price': 10.00},
-        'pkg_50': {'name': '标准套餐', 'points': 600, 'price': 50.00},
-        'pkg_100': {'name': '高级套餐', 'points': 1500, 'price': 100.00},
+        'pkg_10': {'name': '入门套餐', 'points': 200, 'price': 10.00},
+        'pkg_50': {'name': '标准套餐', 'points': 1200, 'price': 50.00},
+        'pkg_100': {'name': '高级套餐', 'points': 3000, 'price': 100.00},
     }
 
     # SQLAlchemy engine options
     # - pool_pre_ping: avoid stale connections on platform proxies
     # - For Render Postgres: force SSL to fix "SSL error: decryption failed or bad record mac"
+    # 优化：使用 NullPool 禁用连接池。
+    # 对于 Neon 等 Serverless 数据库，保持连接会导致持续计费（消耗 Compute Hours）。
+    # 使用 NullPool 后，请求结束会立即断开连接，允许数据库自动休眠以节省额度。
     SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,
+        'poolclass': NullPool,
     }
 
 class DevelopmentConfig(Config):

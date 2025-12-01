@@ -372,32 +372,45 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
     # 1. Create a GeocodingTask record for this batch job.
     log_task = None
     if user_id:
-        try:
-            task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-            log_task = GeocodingTask(
-                user_id=user_id,
-                task_name=task_name
-            )
-            db.session.add(log_task)
-            db.session.flush()  # Use flush to get the ID before full commit
-        except Exception as e:
-            db.session.rollback()
-            current_app.logger.error(f"Failed to create GeocodingTask for user {user_id}: {e}")
-            log_task = None # Ensure task is None if creation fails
+        # Check if user is admin to skip logging
+        user = User.query.get(user_id)
+        if user and user.is_admin:
+            current_app.logger.info(f"Admin user {user_id} initiated geocoding task. Logging skipped.")
+        else:
+            try:
+                task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+                log_task = GeocodingTask(
+                    user_id=user_id,
+                    task_name=task_name
+                )
+                db.session.add(log_task)
+                db.session.flush()  # Use flush to get the ID before full commit
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error(f"Failed to create GeocodingTask for user {user_id}: {e}")
+                log_task = None # Ensure task is None if creation fails
     # --- End of Preliminary Logging ---
 
     # Address-level parallel processing
+    # 限制并发数以防止内存溢出和API速率限制 (Render免费实例内存有限)
+    # 同时也为了避免触发地图服务商的QPS限制
+    CONCURRENCY_LIMIT = 5
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+
+    async def _bounded_geocode(idx, item_data):
+        log_prefix = f"[地址 {idx+1}/{total_addresses}] "
+        completed_address = item_data['completed_address']
+        parsed_address = item_data['parsed_address']
+        
+        async with semaphore:
+            # 随机微小延迟，避免瞬间并发完全同步
+            await asyncio.sleep(0.05) 
+            return await _get_best_geocode_result(completed_address, user_id, parsed_address, log_prefix, debug)
+
     tasks = []
     total_addresses = len(pre_processed_data)
     for i, item in enumerate(pre_processed_data):
-        log_prefix = f"[地址 {i+1}/{total_addresses}] "
-        
-        completed_address = item['completed_address']
-        parsed_address = item['parsed_address']
-        # 创建包含上下文设置的协程任务
-        tasks.append(
-            _get_best_geocode_result(completed_address, user_id, parsed_address, log_prefix, debug)
-        )
+        tasks.append(_bounded_geocode(i, item))
         
     processed_results = await asyncio.gather(*tasks)
 

@@ -1,5 +1,5 @@
 import { performMapSearch, autoSelectPoint } from './api.js';
-import { showToast, showLoading, hideLoading } from './utils.js';
+import { showToast, showLoading, hideLoading, checkUserPoints } from './utils.js';
 import { displayMapSearchResults } from './ui.js';
 
 let state = {
@@ -15,6 +15,8 @@ export function getPoiResults() {
 }
 
 async function handlePoiSearch() {
+    if (!checkUserPoints()) return;
+
     const input = document.getElementById('mapSearchInput');
     const keyword = input.value.trim();
     const source = document.getElementById('map-search-source').value;
@@ -102,6 +104,8 @@ function handleResultClick(e) {
 }
 
 async function handleIntelligentSelect(addressToUse = null) {
+    if (!checkUserPoints()) return;
+
     if (!window.currentUser) {
         showToast('请先登录', 'warning');
         return;

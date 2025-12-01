@@ -181,7 +181,10 @@ export function initializeNotifications() {
         // Initial unread count and poll periodically
         refreshUnreadCount();
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(refreshUnreadCount, 30000);
+        // 优化：将轮询间隔从 30秒 (30000) 延长到 10分钟 (600000)
+        // 目的：给 Neon Serverless 数据库留出足够的空闲时间（默认5分钟无活动自动暂停），
+        // 避免因频繁的心跳请求导致数据库无法休眠，从而耗尽免费 Compute Hours。
+        pollTimer = setInterval(refreshUnreadCount, 600000);
     } catch (e) {
         // No-op
     }

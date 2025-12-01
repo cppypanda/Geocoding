@@ -2,11 +2,17 @@ import os
 from app import create_app
 
 # Fallback to development when running CLI if DATABASE_URL missing
-default_config = 'production'
-if not os.environ.get('DATABASE_URL'):
-    default_config = 'development'
+default_config = 'development'
+
+# 1. Explicitly set to production via env var
+if os.environ.get('FLASK_CONFIG') == 'production':
+    default_config = 'production'
+# 2. Automatically detect Render environment
+elif os.environ.get('RENDER'):
+    default_config = 'production'
 
 app = create_app(default_config)
+print(f" * Application running in {default_config} mode")
 
 if __name__ == '__main__':
     # 在生产环境中，应该通过 Gunicorn 等 WSGI 服务器启动，而不是 app.run()

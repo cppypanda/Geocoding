@@ -1,6 +1,6 @@
 // 主脚本文件 - 导入所有必要的模块
 import { updateUserBar, initializeAuthForms, showLoginModal } from './modules/auth.js';
-import { showToast, convertCoordinates } from './modules/utils.js';
+import { showToast, convertCoordinates, checkUserPoints } from './modules/utils.js';
 import { displayCascadeResults } from './modules/ui.js';
 import { initializeMap, initializeResultsOverviewMap, updateResultsOverviewMapMarkers, ensureResultsOverviewMap, ensureCalibrationMap } from './modules/map.js';
 import { initializeCalibrationPanel } from './modules/calibration.js';
@@ -86,6 +86,8 @@ function initializeButtons() {
     
     if (smartGeocodeBtn) {
         smartGeocodeBtn.addEventListener('click', () => {
+            if (!checkUserPoints()) return;
+
             // handleGeocode('smart'); // 旧的逻辑
             
             // 新的“一键智能编码”逻辑
@@ -161,12 +163,12 @@ function initializeButtons() {
     // 充值流程状态
     let selectedPackageId = null;
     let selectedPaymentMethod = null; // 'alipay' | 'wechat'
-    let wechatOrder = null; // 存储微信支付创建的订单
+    let currentRechargeOrder = null; // 存储当前创建的订单
 
     function resetRechargeFlow() {
         selectedPackageId = null;
         selectedPaymentMethod = null;
-        wechatOrder = null;
+        currentRechargeOrder = null;
         // 视觉重置
         if (rechargePackageList) {
             rechargePackageList.querySelectorAll('.recharge-package-card').forEach(card => card.classList.remove('selected'));
@@ -182,9 +184,9 @@ function initializeButtons() {
         if (orderNumberDisplay) orderNumberDisplay.value = '';
 
         // UI 切换
-        if (alipayInfoArea) alipayInfoArea.style.display = 'block';
+        if (alipayInfoArea) alipayInfoArea.style.display = 'none';
         if (wechatQrArea) wechatQrArea.style.display = 'none';
-        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'inline-block';
+        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
         if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'none';
 
         updatePaymentButtonStates();
@@ -225,7 +227,7 @@ function initializeButtons() {
             rechargePackageList.querySelectorAll('.recharge-package-card').forEach(el => el.classList.remove('selected'));
             card.classList.add('selected');
             selectedPackageId = card.getAttribute('data-package-id');
-            wechatOrder = null; // 套餐变更，清除已创建的微信订单
+            currentRechargeOrder = null; // 套餐变更，清除已创建的订单
             // 选择套餐后，启用支付方式按钮
             if (paymentMethodList) {
                 paymentMethodList.querySelectorAll('.payment-method-btn').forEach(btn => btn.disabled = false);
@@ -243,30 +245,36 @@ function initializeButtons() {
         try {
             const selectedCard = rechargePackageList && rechargePackageList.querySelector('.recharge-package-card.selected');
             if (selectedCard) {
-                const priceDiv = selectedCard.querySelector('div:nth-child(2)');
+                // 优先使用 class 选择器，兼容旧结构则使用 nth-child(3) 或 nth-child(2)
+                const priceDiv = selectedCard.querySelector('.package-real-price') || 
+                                 selectedCard.querySelector('div:nth-child(3)') || 
+                                 selectedCard.querySelector('div:nth-child(2)');
                 if (priceDiv) priceText = priceDiv.textContent || '';
             }
         } catch (e) {}
         const match = priceText.match(/([0-9]+(?:\.[0-9]{1,2})?)/);
         const parsedAmount = match ? parseFloat(match[1]).toFixed(2) : '0.00';
         
+        // 无论是支付宝还是微信，都显示二维码区域
+        const amountForQr = parsedAmount ? (Number(parsedAmount)).toString() : '';
+        
+        if (amountToPayWechat) amountToPayWechat.textContent = parsedAmount;
+        if (alipayInfoArea) alipayInfoArea.style.display = 'none';
+        if (wechatQrArea) wechatQrArea.style.display = 'block';
+        
+        // 隐藏旧的支付宝跳转按钮
+        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
+        // 显示统一的确认按钮（复用 confirmWechatPaymentBtn）
+        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'inline-block';
+        
         if (selectedPaymentMethod === 'alipay') {
-            if (amountToPayAlipay) amountToPayAlipay.textContent = parsedAmount;
-            if (alipayInfoArea) alipayInfoArea.style.display = 'block';
-            if (wechatQrArea) wechatQrArea.style.display = 'none';
-            if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'inline-block';
-            if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'none';
+            setQrImageFor('alipay', amountForQr);
         } else if (selectedPaymentMethod === 'wechat') {
-            const amountForQr = parsedAmount ? (Number(parsedAmount)).toString() : '';
-            if (amountToPayWechat) amountToPayWechat.textContent = parsedAmount;
-            if (alipayInfoArea) alipayInfoArea.style.display = 'none';
-            if (wechatQrArea) wechatQrArea.style.display = 'block';
-            if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
-            if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'inline-block';
             setQrImageFor('wechat', amountForQr);
-            // 为微信支付提前创建订单以显示订单号
-            createRechargeOrderIfNeeded();
         }
+        
+        // 为选定的支付方式提前创建订单以显示订单号
+        createRechargeOrderIfNeeded();
     }
 
     // 支付方式选择
@@ -293,8 +301,8 @@ function initializeButtons() {
     function setQrImageFor(method, amount) {
         if (!paymentQrCode) return;
         const basePath = '/static/images/payment';
-        // 根据支付方式确定文件扩展名
-        const extension = method === 'wechat' ? 'jpg' : 'png';
+        // 根据支付方式确定文件扩展名 (都使用 jpg)
+        const extension = 'jpg';
         const fileName = amount ? `${amount}.${extension}` : '';
         const src = `${basePath}/${method}/${fileName}`;
         paymentQrCode.src = src;
@@ -324,7 +332,7 @@ function initializeButtons() {
     }
 
     async function createRechargeOrderIfNeeded() {
-        if (wechatOrder) return wechatOrder; // 如果已为微信创建订单，直接返回
+        if (currentRechargeOrder) return currentRechargeOrder; // 如果已创建订单，直接返回
         if (!selectedPackageId) return null;
         try {
             // 从 meta 标签获取 CSRF token
@@ -355,11 +363,11 @@ function initializeButtons() {
                 return null;
             }
             const order = { order_number: data.order_number, amount: data.amount };
-            if (selectedPaymentMethod === 'wechat') {
-                wechatOrder = order; // 缓存微信订单
-                // 创建成功后立即显示订单号
-                if (orderNumberDisplay) orderNumberDisplay.value = order.order_number;
-            }
+            
+            currentRechargeOrder = order; // 缓存订单
+            // 创建成功后立即显示订单号
+            if (orderNumberDisplay) orderNumberDisplay.value = order.order_number;
+            
             return order;
         } catch (err) {
             showToast('网络异常，创建订单失败', 'danger');
@@ -418,10 +426,10 @@ function initializeButtons() {
         });
     }
 
-    // 确认微信支付（手动）
+    // 确认支付（手动）- 复用 confirmWechatPaymentBtn
     if (confirmWechatPaymentBtn) {
         confirmWechatPaymentBtn.addEventListener('click', async () => {
-            if (!selectedPackageId || selectedPaymentMethod !== 'wechat' || !wechatOrder) {
+            if (!selectedPackageId || !selectedPaymentMethod || !currentRechargeOrder) {
                 showToast('请先选择套餐并生成订单', 'warning');
                 return;
             }
@@ -884,13 +892,19 @@ function initializeButtons() {
     // 智能选点按钮
     const smartSelectPointBtn = document.getElementById('smartSelectPointBtn');
     if (smartSelectPointBtn) {
-        smartSelectPointBtn.addEventListener('click', handleAutoSelect);
+        smartSelectPointBtn.addEventListener('click', () => {
+            if (!checkUserPoints()) return;
+            handleAutoSelect();
+        });
     }
 
     // 智能校准按钮
     const smartCalibrationBtn = document.getElementById('smartCalibrationBtn');
     if (smartCalibrationBtn) {
-        smartCalibrationBtn.addEventListener('click', startSmartCalibration);
+        smartCalibrationBtn.addEventListener('click', () => {
+            if (!checkUserPoints()) return;
+            startSmartCalibration();
+        });
     }
 
     // 导出文件按钮与确认流程
@@ -966,6 +980,8 @@ function initializeButtons() {
     }
 
     async function handleConfirmExport() {
+        if (!checkUserPoints()) return;
+
         try {
             if (!selectedExportFormat) {
                 showToast('未选择导出格式', 'warning');

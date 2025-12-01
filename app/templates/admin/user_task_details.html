@@ -1,0 +1,81 @@
+{% extends 'admin/base.html' %}
+
+{% block title %}任务详情{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">任务详情 <small class="text-muted">#{{ task.id }}</small></h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <a href="{{ url_for('admin.user_tasks') }}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> 返回列表
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">基本信息</div>
+            <div class="card-body">
+                <p><strong>任务名称:</strong> {{ task.task_name }}</p>
+                <p><strong>所属用户:</strong> 
+                    {% if task.user %}
+                        {{ task.user.username or task.user.email }} (ID: {{ task.user.id }})
+                    {% else %}
+                        <span class="text-muted">未知用户</span>
+                    {% endif %}
+                </p>
+                <p><strong>创建时间:</strong> {{ task.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+                <p><strong>更新时间:</strong> {{ task.updated_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>结果数据 (JSON)</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyJson()">
+            <i class="bi bi-clipboard"></i> 复制JSON
+        </button>
+    </div>
+    <div class="card-body">
+        <pre id="jsonContent" class="bg-light p-3 border rounded" style="max-height: 600px; overflow-y: auto; white-space: pre-wrap;"></pre>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const rawData = {{ task.result_data | tojson }};
+        try {
+            // 尝试解析两次，以防是 JSON 字符串
+            let jsonObj = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
+            // 如果解析出来还是字符串（可能是双重转义），再试一次
+            if (typeof jsonObj === 'string') {
+                try { jsonObj = JSON.parse(jsonObj); } catch(e) {}
+            }
+            
+            document.getElementById('jsonContent').textContent = JSON.stringify(jsonObj, null, 4);
+        } catch (e) {
+            console.error('JSON parsing failed:', e);
+            document.getElementById('jsonContent').textContent = rawData;
+        }
+    });
+
+    function copyJson() {
+        const content = document.getElementById('jsonContent').textContent;
+        navigator.clipboard.writeText(content).then(() => {
+            alert('JSON内容已复制到剪贴板');
+        }).catch(err => {
+            console.error('无法复制: ', err);
+            alert('复制失败，请手动复制');
+        });
+    }
+</script>
+{% endblock %}
+

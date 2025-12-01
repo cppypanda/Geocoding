@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
-from ..models import LocationType, User, GeocodingTask, AddressLog
+from ..models import LocationType, User, GeocodingTask, AddressLog, Task
 from .. import db
 from functools import wraps
 
@@ -123,3 +123,19 @@ def geocoding_log_details(task_id):
         page=page, per_page=per_page, error_out=False
     )
     return render_template('admin/geocoding_log_details.html', task=task, addresses_pagination=addresses_pagination)
+
+@admin_bp.route('/user_tasks')
+@admin_required
+def user_tasks():
+    page = request.args.get('page', 1, type=int)
+    per_page = 20
+    tasks_pagination = Task.query.order_by(Task.updated_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return render_template('admin/user_tasks.html', tasks_pagination=tasks_pagination)
+
+@admin_bp.route('/user_tasks/<int:task_id>')
+@admin_required
+def user_task_details(task_id):
+    task = Task.query.get_or_404(task_id)
+    return render_template('admin/user_task_details.html', task=task)

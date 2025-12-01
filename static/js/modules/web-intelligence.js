@@ -1,4 +1,4 @@
-import { showToast } from './utils.js';
+import { showToast, checkUserPoints } from './utils.js';
 import { fetchAPI } from './api.js';
 
 // 智能地址情报三步骤模块
@@ -181,6 +181,8 @@ class WebIntelligenceManager {
 
     // 第一步：搜集摘录地址信息
     async executeStep1() {
+        if (!checkUserPoints()) return;
+
         // 以输入框中的最新地址为准
         const input = document.getElementById('currentAnalysisAddressInput');
         if (input && input.value && input.value.trim()) {
@@ -254,6 +256,8 @@ class WebIntelligenceManager {
 
     // 第三步：生成关键词建议
     async executeStep3() {
+        if (!checkUserPoints()) return;
+
         // 若尚未完成信息搜集，则自动执行第一步后再生成关键词
         if (!this.dossier) {
             try {

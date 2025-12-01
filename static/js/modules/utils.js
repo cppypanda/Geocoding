@@ -369,14 +369,6 @@ export function addMarkersToMapAndFitBounds(mapInstance, dataOrPoints, markerArr
 
 // 新策略：前端不再声明或使用积分消耗常量
 
-/**
- * 检查用户积分是否足够执行某个操作。
- * @param {object} currentUser - 当前用户信息对象，包含 points 属性。
- * @param {number} requiredPoints - 执行操作所需的积分。
- * @returns {boolean} 如果积分足够则返回 true，否则返回 false。
- */
-// 新策略：前端不再进行积分预检查
-
 // 坐标转换函数
 function outOfChina(lng, lat) {
     return !(lng > 73.66 && lng < 135.05 && lat > 3.86 && lat < 53.55);
@@ -477,4 +469,85 @@ export function convertCoordinates(lng, lat, fromSystem, toSystem) {
     } else {
         throw new Error(`不支持的坐标转换: ${fromSystem} -> ${toSystem}`);
     }
+}
+
+/**
+ * 显示“积分已耗光”模态框
+ */
+export function showPointsExhaustedModal() {
+    let modalEl = document.getElementById('pointsExhaustedModal');
+    // 如果模态框不存在，则动态创建
+    if (!modalEl) {
+        const modalHTML = `
+        <div class="modal fade" id="pointsExhaustedModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content" style="border-radius: 25px;">
+                    <div class="modal-header border-0">
+                        <h5 class="modal-title fw-bold"><i class="bi bi-exclamation-circle text-warning me-2"></i>积分不足</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body text-center py-4">
+                        <p class="mb-4 lead" style="font-size: 1.1rem;">您的积分已耗光，无法继续进行此操作。<br><span class="text-muted small">请获取免费积分或充值以继续使用。</span></p>
+                        <div class="d-grid gap-3 col-10 mx-auto">
+                             <button type="button" class="btn btn-outline-info" id="exhaustedFreePointsBtn"><i class="bi bi-gift"></i> 免费赚积分</button>
+                            <button type="button" class="btn btn-primary" id="exhaustedRechargeBtn"><i class="bi bi-credit-card"></i> 积分充值</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+        modalEl = document.getElementById('pointsExhaustedModal');
+        
+        // 绑定按钮事件
+        const freeBtn = document.getElementById('exhaustedFreePointsBtn');
+        const rechargeBtn = document.getElementById('exhaustedRechargeBtn');
+        
+        if (freeBtn) {
+            freeBtn.addEventListener('click', () => {
+                const m = bootstrap.Modal.getInstance(modalEl);
+                if (m) m.hide();
+                const freeModalEl = document.getElementById('freePointsModal');
+                if (freeModalEl) {
+                    const freeModal = bootstrap.Modal.getOrCreateInstance(freeModalEl);
+                    freeModal.show();
+                }
+            });
+        }
+        
+        if (rechargeBtn) {
+            rechargeBtn.addEventListener('click', () => {
+                const m = bootstrap.Modal.getInstance(modalEl);
+                if (m) m.hide();
+                const rechargeModalEl = document.getElementById('rechargeModal');
+                if (rechargeModalEl) {
+                    const rechargeModal = bootstrap.Modal.getOrCreateInstance(rechargeModalEl);
+                    rechargeModal.show();
+                }
+            });
+        }
+    }
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    modal.show();
+}
+
+/**
+ * 检查用户积分是否足够（> 0）。
+ * 如果积分为0或更少，显示警告模态框并返回 false。
+ * 如果用户未登录（currentUser 为 null），则返回 true (让后续流程处理登录检查) 或 false (取决于策略)。
+ * 此处假设登录检查由其他逻辑处理，仅关注已登录且积分为0的情况。
+ */
+export function checkUserPoints() {
+    const user = window.currentUser;
+    // 如果未登录，暂时放行，由登录检查逻辑拦截（通常这些按钮操作前都会查登录）
+    if (!user) {
+        return true; 
+    }
+    
+    // 如果已登录且积分为 0 (或负数)
+    if (user.points !== undefined && user.points <= 0) {
+        showPointsExhaustedModal();
+        return false;
+    }
+    return true;
 }

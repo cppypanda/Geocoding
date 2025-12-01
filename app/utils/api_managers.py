@@ -2,6 +2,7 @@ import time
 from collections import deque
 import os
 import asyncio
+import random
 from flask import current_app
 from datetime import datetime, timedelta
 
@@ -17,7 +18,13 @@ REASON_OTHER = 'other'
 class APIKeyManager:
     def __init__(self, service_name, default_key=None):
         self.service_name = service_name
-        self.default_key = default_key
+        self.system_keys = []
+        if default_key:
+            # 支持多个Key，使用逗号分隔
+            if ',' in default_key:
+                self.system_keys = [k.strip() for k in default_key.split(',') if k.strip()]
+            else:
+                self.system_keys = [default_key]
 
     def get_next_key(self, user_id=None):
         """
@@ -38,8 +45,11 @@ class APIKeyManager:
                 self._update_last_used(user_key)
                 return user_key.key_value, 'user'
 
-        # 2. Fallback to system's default key
-        return self.default_key, 'system'
+        # 2. Fallback to system's default key (Randomly select one to distribute load)
+        if self.system_keys:
+            return random.choice(self.system_keys), 'system'
+            
+        return None, 'system'
 
     def report_failure(self, api_key, reason=REASON_OTHER):
         """Reports an API call failure and updates the key status."""
