@@ -177,6 +177,7 @@ def login_register_email():
 @auth_bp.route('/logout', methods=['GET'])
 def logout():
     logout_user()
+    session.clear() # 清除所有 session 数据，防止 cookie 过大
     return jsonify({'success': True, 'message': '已退出登录'})
 
 @auth_bp.route('/check_login_status', methods=['GET'])

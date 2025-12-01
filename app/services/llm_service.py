@@ -625,6 +625,14 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10) ->
             'search_query': None,
             'error': '地址列表为空'
         }
+
+    if len(addresses) <= 5:
+        return {
+            'theme_name': '未命名任务',
+            'search_needed': False,
+            'search_query': None,
+            'error': None
+        }
     
     try:
         # 1. 智能抽样

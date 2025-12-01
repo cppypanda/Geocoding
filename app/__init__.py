@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, request, jsonify, render_template, send_file, session, url_for
+from flask import Flask, request, jsonify, render_template, send_file, session, url_for, redirect
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
@@ -60,6 +60,13 @@ def create_app(config_name=None, config_overrides=None):
             return jsonify({'success': False, 'message': f'CSRF校验失败: {e.description}'}), 400
         # Fallback to a simple text response
         return jsonify({'success': False, 'message': 'CSRF校验失败'}), 400
+
+    # Handle Unauthorized (401) errors for AJAX requests to prevent redirect loops
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+             return jsonify({'success': False, 'message': '请先登录', 'login_required': True}), 401
+        return redirect(url_for(login_manager.login_view, next=request.url))
 
     if app.config.get('ZHIPUAI_KEY'):
         app.extensions['zhipuai_client'] = ZhipuAI(api_key=app.config['ZHIPUAI_KEY'])
