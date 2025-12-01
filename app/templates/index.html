@@ -89,14 +89,15 @@
                 <div class="row justify-content-center">
                     <div class="col-lg-10 col-md-11">
                         <div class="form-group mb-3 position-relative">
-                            <p class="text-muted mb-2">请将您的地址粘贴到下方输入框，每行一个地址。</p>
+                            <p class="text-muted mb-2"><strong>支持地址批量转换</strong>，请将地址粘贴到下方输入框，每行一个。</p>
                             <label for="addresses" class="form-label visually-hidden">请将您需要定位的地址粘贴到下方 (每行一个)</label>
                             <div class="form-text text-muted mb-2">提示：采用"省、市、县、具体地名"的格式化地名，可以获得更准确的地理编码结果。</div>
-                            <textarea class="form-control address-textarea" id="addresses" rows="8" placeholder="例如：
-北京市海淀区中关村创业大街
-上海市浦东新区世纪大道88号金茂大厦
-四川省成都市武侯祠大街231号"></textarea>
+                            <textarea class="form-control address-textarea" id="addresses" rows="8" placeholder="在此粘贴地址，支持批量查询，每行一个
+例如：
+北京市海淀区中关村大街1号
+上海市浦东新区世纪大道100号"></textarea>
                             <small id="addressCountDisplay" class="form-text text-muted text-start d-block mt-1">0 条地址</small>
+                            <div id="geocoding-tip" class="mt-2 text-muted small" style="display: none;"></div>
                             
                             <div class="advanced-options-button-container">
                                 <button class="btn btn-outline-secondary btn-sm advanced-options-btn" type="button" data-bs-toggle="collapse" data-bs-target="#advancedAddressOptions" aria-expanded="false" aria-controls="advancedAddressOptions">
@@ -1027,7 +1028,7 @@
                                 <h6>快速上手</h6>
                                 <ol class="mb-3">
                                     <li>登录账户（未登录将无法开始编码）。</li>
-                                    <li>将地址粘贴到输入框，每行一个地址。</li>
+                                    <li><strong>粘贴地址 (支持批量)</strong>: 将单个或多个地址粘贴到输入框。批量处理时，请确保<strong>每行只有一个地址</strong>，这将大幅提高您的工作效率。</li>
                                     <li>点击"多源编码"开始获取候选结果。</li>
                                     <li>点击"智能编码"可一键完成编码并自动校准。</li>
                                     <li>在批量结果中确认合适结果，或进入"逐条查看与校准"。</li>
@@ -1037,7 +1038,10 @@
                             <div class="col-12">
                                 <h6>常用功能</h6>
                                 <ul class="mb-3">
-                                    <li>数据清洗：支持自动分行、统一省市前缀、自动补全行政区划。</li>
+                                    <li><strong>数据清洗</strong>：地址格式不规范？试试强大的数据清洗工具：
+                                        <small class="d-block ps-3 mt-1">- <strong>自动分行</strong>: 可将整段地址按标点符号（如逗号、分号）快速拆分为多行，是批量处理前整理数据的利器。</small>
+                                        <small class="d-block ps-3">- <strong>统一前缀/自动补全</strong>: 快速为所有地址添加省市信息，或自动补全不完整的行政区划。</small>
+                                    </li>
                                     <li>地址查找工具：在地图上搜索并选择更精准的地点。</li>
                                     <li>API Key 配置：在"设置"中填写各地图/AI Key，可提升额度与体验。</li>
                                     <li>积分与充值：右上角可查看积分，支持充值与活动获取。</li>

@@ -1060,6 +1060,20 @@ function initializeButtons() {
 // 地理编码处理
 async function handleGeocode(mode) {
     
+    const geocodingTip = document.getElementById('geocoding-tip');
+    const textarea = document.getElementById('addresses');
+    
+    // 检查地址行数并显示提示
+    if (textarea && geocodingTip) {
+        const lines = textarea.value.trim().split('\n').filter(line => line.trim() !== '');
+        if (lines.length === 1) {
+            geocodingTip.textContent = '小提示：您可以一次粘贴多个地址进行批量处理哦！';
+            geocodingTip.style.display = 'block';
+        } else {
+            geocodingTip.style.display = 'none';
+        }
+    }
+
     // 先主动检查最新用户登录状态
     await checkUserLoginStatus();
     
@@ -1079,9 +1093,9 @@ async function handleGeocode(mode) {
         return;
     }
     
-    const textarea = document.getElementById('addresses');
     if (!textarea || !textarea.value.trim()) {
         showToast('请输入地址', 'warning');
+        if (geocodingTip) geocodingTip.style.display = 'none'; // 如果没有输入，也隐藏提示
         return;
     }
     
@@ -1113,6 +1127,7 @@ async function handleGeocode(mode) {
         
     } catch (error) {
         showToast('地理编码处理失败: ' + error.message, 'error');
+        if (geocodingTip) geocodingTip.style.display = 'none'; // 出错时隐藏提示
     }
 }
 
