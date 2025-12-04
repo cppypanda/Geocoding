@@ -174,7 +174,7 @@ def login_register_email():
     message = '注册并登录成功' if new_user_created else '登录成功'
     return jsonify({'success': True, 'message': message, 'user': user_info})
 
-@auth_bp.route('/logout', methods=['GET'])
+@auth_bp.route('/logout', methods=['GET', 'POST'])
 def logout():
     logout_user()
     session.clear() # 清除所有 session 数据，防止 cookie 过大

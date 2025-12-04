@@ -272,7 +272,7 @@ class TiandituSearcher(BaseSearcher):
             return self._sync_search(keyword)
 
     def _sync_search(self, keyword):
-        url = "http://api.tianditu.gov.cn/v2/search"
+        url = "https://api.tianditu.gov.cn/v2/search"
         
         # 使用行政区划区域搜索（queryType=12），并尽量设置 specify 以提高召回的行政区字段
         # from ..utils.address_processing import extract_province_city
@@ -324,7 +324,12 @@ class TiandituSearcher(BaseSearcher):
         print(f"天地图POI搜索请求: {url}")
         print(f"天地图请求参数: {params}")
         
-        response = requests.get(url, params=params, timeout=10)
+        # Add User-Agent header to avoid 418 Client Error
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         
         print(f"天地图API响应状态: {response.status_code}")
         if response.status_code != 200:
