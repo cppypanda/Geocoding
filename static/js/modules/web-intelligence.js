@@ -1,4 +1,4 @@
-import { showToast, checkUserPoints } from './utils.js';
+import { showToast, checkUserPoints, escapeHtml } from './utils.js';
 import { fetchAPI } from './api.js';
 
 // 智能地址情报三步骤模块
@@ -246,7 +246,7 @@ class WebIntelligenceManager {
         } else {
             excerptsList.innerHTML = dossier.collated_excerpts.map((excerpt) => `
                 <div class="list-group-item excerpt-item p-2 mb-2">
-                    <div class="mb-0">${excerpt.excerpt}</div>
+                    <div class="mb-0">${escapeHtml(excerpt.excerpt)}</div>
                 </div>
             `).join('');
         }
@@ -333,24 +333,23 @@ class WebIntelligenceManager {
             keywordsList.innerHTML = '<div class="alert alert-info">未生成关键词建议</div>';
         } else {
             keywordsList.innerHTML = suggestions.map((suggestion, index) => {
-                // 为onclick正确转义特殊字符
-                const queryParam = JSON.stringify(suggestion.query);
-                
                 return `
                 <div class="keyword-suggestion d-flex justify-content-between align-items-center p-3 mb-2 rounded">
                     <div class="keyword-info flex-grow-1 me-3">
-                        <strong class="text-dark d-block">${suggestion.display}</strong>
-                        <p class="small mb-0 text-muted">${suggestion.reason}</p>
+                        <strong class="text-dark d-block">${escapeHtml(suggestion.display)}</strong>
+                        <p class="small mb-0 text-muted">${escapeHtml(suggestion.reason)}</p>
                     </div>
                     <div class="keyword-action">
-                        <button class="btn btn-sm btn-outline-primary use-keyword-btn" 
-                                onclick='webIntelligence.useKeywordForSearch(${queryParam})'>
+                        <button class="btn btn-sm btn-outline-primary use-keyword-btn" type="button">
                             <i class="bi bi-search"></i> 使用搜索
                         </button>
                     </div>
                 </div>
                 `;
             }).join('');
+            keywordsList.querySelectorAll('.use-keyword-btn').forEach((button, index) => {
+                button.addEventListener('click', () => this.useKeywordForSearch(suggestions[index].query));
+            });
         }
 
         resultsDiv.style.display = 'block';

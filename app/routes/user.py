@@ -5,10 +5,11 @@ import requests
 import zhipuai
 import secrets
 import string
+import uuid
 
 from flask import Blueprint, request, jsonify, session, current_app
 from flask_login import login_required, current_user
-from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash
 
 from .. import db
 from ..models import (User, Feedback, GeocodingHistory, Notification, 
@@ -21,6 +22,12 @@ user_bp = Blueprint('user', __name__, url_prefix='/user')
 
 REFERRAL_POINTS_PER_SIDE = 50
 
+
+def _mask_secret(value):
+    if not value:
+        return None
+    return f'{value[:4]}...{value[-4:]}' if len(value) > 8 else '已配置'
+
 @user_bp.route('/profile', methods=['GET'])
 @login_required
 def get_profile():
@@ -32,10 +39,10 @@ def get_profile():
             'username': user.username or user.email.split('@')[0],
             'points': user.points,
             'avatar_url': user.avatar_url,
-            'amap_key': user.amap_key,
-            'baidu_key': user.baidu_key,
-            'tianditu_key': user.tianditu_key,
-            'ai_key': user.ai_key
+            'amap_key': _mask_secret(user.amap_key),
+            'baidu_key': _mask_secret(user.baidu_key),
+            'tianditu_key': _mask_secret(user.tianditu_key),
+            'ai_key': _mask_secret(user.ai_key)
         }
         # Note: Daily request count logic needs to be re-implemented if required,
         # as the original implementation was tied to the old DB structure.
@@ -44,9 +51,25 @@ def get_profile():
         return jsonify({'success': True, 'user': user_info})
     return jsonify({'success': False, 'message': '用户未找到'}), 404
 
-def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in {'png', 'jpg', 'jpeg', 'gif'}
+_IMAGE_SIGNATURES = {
+    'png': (b'\x89PNG\r\n\x1a\n', 'image/png'),
+    'jpg': (b'\xff\xd8\xff', 'image/jpeg'),
+    'jpeg': (b'\xff\xd8\xff', 'image/jpeg'),
+    'gif': (b'GIF8', 'image/gif'),
+}
+
+
+def validate_image(file_storage):
+    if not file_storage.filename or '.' not in file_storage.filename:
+        return None
+    extension = file_storage.filename.rsplit('.', 1)[1].lower()
+    signature_info = _IMAGE_SIGNATURES.get(extension)
+    if not signature_info:
+        return None
+    signature, content_type = signature_info
+    header = file_storage.stream.read(max(16, len(signature)))
+    file_storage.stream.seek(0)
+    return content_type if header.startswith(signature) else None
 
 @user_bp.route('/upload_feedback_image', methods=['POST'])
 @login_required
@@ -55,42 +78,43 @@ def upload_feedback_image():
         return jsonify({'success': False, 'message': '没有文件部分'}), 400
     
     file = request.files['image']
-    feedback_id = request.form.get('feedback_id', type=int) # Get feedback_id
+    feedback_id = request.form.get('feedback_id', type=int)
     
     if file.filename == '':
         return jsonify({'success': False, 'message': '未选择文件'}), 400
         
-    if file and allowed_file(file.filename):
-        file_url = upload_file_to_r2(file, folder='feedback')
+    if not feedback_id:
+        return jsonify({'success': False, 'message': '缺少反馈记录ID'}), 400
+    feedback_item = Feedback.query.filter_by(id=feedback_id, user_id=current_user.id).first()
+    if not feedback_item:
+        return jsonify({'success': False, 'message': '反馈记录不存在或无权访问'}), 404
+    if (feedback_item.uploaded_images or 0) >= min(feedback_item.total_images or 0, 5):
+        return jsonify({'success': False, 'message': '反馈图片数量已达到上限'}), 400
+
+    safe_content_type = validate_image(file)
+    if safe_content_type:
+        file_url = upload_file_to_r2(file, folder='feedback', content_type=safe_content_type)
         if file_url:
             current_app.logger.info(f"Image uploaded to R2, URL: {file_url}, feedback_id received: {feedback_id}")
             # If feedback_id is provided, update the record
-            if feedback_id:
-                try:
-                    # Lock the row for update to prevent race conditions
-                    feedback_item = db.session.query(Feedback).filter_by(id=feedback_id).with_for_update().first()
-
-                    if feedback_item and feedback_item.user_id == current_user.id:
-                        current_app.logger.info(f"Found and locked feedback item {feedback_id} for user {current_user.id}.")
-                        
-                        # Update image paths
-                        current_paths = json.loads(feedback_item.image_paths or '[]')
-                        current_paths.append(file_url)
-                        feedback_item.image_paths = json.dumps(current_paths)
-                        
-                        # Update uploaded images count and status
-                        feedback_item.uploaded_images = (feedback_item.uploaded_images or 0) + 1
-                        if feedback_item.uploaded_images >= feedback_item.total_images:
-                            feedback_item.upload_status = 'complete'
-                        
-                        db.session.commit()
-                        current_app.logger.info(f"Successfully updated feedback {feedback_id} with new image path.")
-                    else:
-                        current_app.logger.warning(f"Could not find feedback item {feedback_id} or user mismatch.")
-                except Exception as e:
-                    db.session.rollback()
-                    current_app.logger.error(f"Error updating feedback with image URL: {e}")
-                    # Don't fail the whole upload, just log the error
+            try:
+                feedback_item = (
+                    Feedback.query
+                    .filter_by(id=feedback_id, user_id=current_user.id)
+                    .with_for_update()
+                    .first()
+                )
+                current_paths = json.loads(feedback_item.image_paths or '[]')
+                current_paths.append(file_url)
+                feedback_item.image_paths = json.dumps(current_paths)
+                feedback_item.uploaded_images = (feedback_item.uploaded_images or 0) + 1
+                if feedback_item.uploaded_images >= min(feedback_item.total_images or 0, 5):
+                    feedback_item.upload_status = 'complete'
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error(f"Error updating feedback with image URL: {e}")
+                return jsonify({'success': False, 'message': '图片记录保存失败'}), 500
             
             return jsonify({'success': True, 'image_url': file_url})
         else:
@@ -104,7 +128,10 @@ def upload_feedback_image():
 def feedback():
     data = request.json
     feedback_text = data.get('feedback_text')
-    total_images = data.get('total_images', 0)
+    try:
+        total_images = max(0, min(int(data.get('total_images', 0) or 0), 5))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': '图片数量无效。'}), 400
 
     if not feedback_text:
         return jsonify({'success': False, 'message': '反馈内容不能为空。'}), 400
@@ -285,68 +312,19 @@ def delete_history():
 
 @user_bp.route('/get_session_results', methods=['GET'])
 def get_session_results_route():
-    original_address = request.args.get('address')
-    if not original_address:
-        return jsonify({'success': False, 'message': '地址不能为空'}), 400
-
-    session_id = session.sid
-    if not session_id:
-        return jsonify({'success': False, 'message': '会话ID不存在'}), 400
-
-    # This function was not part of the original file's imports, so it's commented out.
-    # If it's meant to be re-added, its imports and logic would need to be restored.
-    # For now, returning a placeholder response.
-    return jsonify({'success': False, 'message': '会话结果获取功能待实现'}), 501
+    return jsonify({'success': False, 'message': '该旧版会话接口已停用'}), 410
 
 @user_bp.route('/save_calibration_result', methods=['POST'])
 @login_required
 def save_calibration_result():
-    user_id = current_user.id
-    data = request.json
-    original_address = data.get('original_address')
-    selected_result_index = data.get('selected_result_index')
-
-    if not original_address or selected_result_index is None:
-        return jsonify({'success': False, 'message': '原始地址和选中结果索引不能为空'}), 400
-
-    session_id = session.sid
-    if not session_id:
-        return jsonify({'success': False, 'message': '会话ID不存在'}), 400
-    
-    # 从缓存中加载所有地理编码结果
-    # This function was not part of the original file's imports, so it's commented out.
-    # If it's meant to be re-added, its imports and logic would need to be restored.
-    # For now, returning a placeholder response.
-    all_geocoded_results = [] # Placeholder
-
-    if not all_geocoded_results or not (0 <= selected_result_index < len(all_geocoded_results)):
-        return jsonify({'success': False, 'message': '无效的会话或选中的结果索引'}), 400
-
-    # 确保 geocoded_results_json 存储的是完整的列表，而不是单个选中的结果
-    geocoded_results_json = json.dumps(all_geocoded_results, ensure_ascii=False)
-
-    new_history_record = GeocodingHistory(
-        user_id=user_id,
-        address=original_address,
-        geocoded_results_json=geocoded_results_json,
-        selected_result_index=selected_result_index
-    )
-    
-    try:
-        db.session.add(new_history_record)
-        db.session.commit()
-        return jsonify({'success': True, 'message': '校准结果保存成功'})
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error saving calibration result: {e}")
-        return jsonify({'success': False, 'message': f'保存校准结果失败: {e}'}), 500
+    return jsonify({'success': False, 'message': '该旧版校准保存接口已停用'}), 410
 
 @user_bp.route('/get_notifications', methods=['GET'])
 @login_required
 def get_notifications():
     user_id = current_user.id
     page = request.args.get('page', 1, type=int)
-    limit = request.args.get('limit', 10, type=int)
+    limit = min(max(request.args.get('limit', 10, type=int), 1), 100)
     
     pagination = Notification.query.filter_by(user_id=user_id).order_by(Notification.created_at.desc()).paginate(page=page, per_page=limit, error_out=False)
     notifications = pagination.items
@@ -414,12 +392,22 @@ def delete_account():
         Referral.query.filter_by(invitee_user_id=uid).delete(synchronize_session=False)
         Referral.query.filter_by(referrer_user_id=uid).delete(synchronize_session=False)
 
-        # 删除用户本身
+        # Keep financial and audit rows valid by anonymizing the user instead of deleting it.
         user = user_service.get_user_by_id(uid)
         if not user:
             db.session.rollback()
             return jsonify({'success': False, 'message': '用户不存在或已删除'}), 404
-        db.session.delete(user)
+        user.email = f'deleted-{uuid.uuid4().hex}@invalid.local'
+        user.username = None
+        user.password_hash = generate_password_hash(secrets.token_urlsafe(32))
+        user.avatar_url = None
+        user.amap_key = None
+        user.baidu_key = None
+        user.tianditu_key = None
+        user.ai_key = None
+        user.is_admin = False
+        user.is_deleted = True
+        user.deleted_at = datetime.utcnow()
         db.session.commit()
 
         # 提交后执行登出
@@ -446,7 +434,7 @@ def get_user_api_keys():
         if not key_value: continue
         masked_key = f"{key_value[:4]}...{key_value[-4:]}" if len(key_value) > 8 else key_value
         masked_keys.append({
-            "service_name": key.provider,
+            "service_name": key.service_name,
             "masked_key": masked_key,
             "points_awarded": key.earned_points,
             "status": key.status
@@ -466,11 +454,11 @@ def _validate_amap_key(api_key):
             error_message = data.get('info', '未知错误')
             return False, error_message
     except requests.RequestException as e:
-        return False, f"请求高德API失败: {e}"
+        return False, "请求高德API失败"
 
 def _validate_baidu_key(api_key):
     """使用百度地理编码API验证百度Key的有效性。"""
-    url = f"http://api.map.baidu.com/geocoding/v3/?address=北京市&output=json&ak={api_key}"
+    url = f"https://api.map.baidu.com/geocoding/v3/?address=北京市&output=json&ak={api_key}"
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
@@ -483,11 +471,11 @@ def _validate_baidu_key(api_key):
             error_message = data.get('message', '未知错误')
             return False, error_message
     except requests.RequestException as e:
-        return False, f"请求百度API失败: {e}"
+        return False, "请求百度API失败"
 
 def _validate_tianditu_key(api_key):
     """使用天地图地理编码API验证天地图Key的有效性。"""
-    url = "http://api.tianditu.gov.cn/geocoder"
+    url = "https://api.tianditu.gov.cn/geocoder"
     # 天地图的API文档中 POST 请求参数为 postStr，其值为一个JSON字符串
     post_data = {
         'postStr': f'{{"keyWord":"北京市"}}',
@@ -516,7 +504,7 @@ def _validate_tianditu_key(api_key):
     except requests.HTTPError as e:
         return False, f"请求天地图API时发生HTTP错误: {e.response.text if e.response else e}"
     except requests.RequestException as e:
-        return False, f"请求天地图API失败: {e}"
+        return False, "请求天地图API失败"
     except json.JSONDecodeError:
         return False, f"解析天地图API响应失败。响应内容: {response.text}"
 
@@ -527,7 +515,7 @@ def _validate_zhipuai_key(api_key):
         client = zhipuai.ZhipuAI(api_key=api_key)
         # 发送一个非常简单的请求来触发验证
         client.chat.completions.create(
-            model="glm-3-turbo", # 使用最新的稳定模型
+            model=current_app.config.get('ZHIPUAI_MODEL', 'glm-4.7-flash'),
             messages=[{"role": "user", "content": "你好"}],
             max_tokens=2,
             temperature=0.1,
@@ -541,7 +529,7 @@ def _validate_zhipuai_key(api_key):
     except Exception as e:
         # 其他异常（如网络问题）不应视为key无效
         # 但为了用户体验，我们还是返回一个通用错误
-        return False, f"验证时发生未知错误: {str(e)}"
+        return False, "验证服务暂时不可用"
         
 @user_bp.route('/keys', methods=['POST'])
 @login_required
@@ -570,7 +558,7 @@ def save_user_api_key():
         return jsonify(success=False, message=f"API Key无效: {error_message}"), 400
 
     # Save or update key
-    existing_key = UserApiKey.query.filter_by(user_id=user_id, provider=service_name).first()
+    existing_key = UserApiKey.query.filter_by(user_id=user_id, service_name=service_name).first()
     was_new = False
     if existing_key:
         existing_key.key_value = api_key
@@ -583,13 +571,15 @@ def save_user_api_key():
         
         new_key = UserApiKey(
             user_id=user_id,
-            provider=service_name,
+            service_name=service_name,
             key_value=api_key,
             earned_points=points_to_award
         )
         db.session.add(new_key)
-        if was_new:
-            user_service.add_points(user_id, points_to_award)
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify(success=False, message="用户不存在"), 404
+        user.points = (user.points or 0) + points_to_award
 
     try:
         db.session.commit()
@@ -672,14 +662,22 @@ def bind_referral():
         return jsonify({'success': False, 'message': '已绑定过推荐人'}), 409
 
     try:
-        invitee.referrer_id = referrer.id
-        db.session.add(Referral(referrer_user_id=referrer.id, invitee_user_id=invitee.id))
-        # Award points for both sides
-        try:
-            user_service.add_points(referrer.id, REFERRAL_POINTS_PER_SIDE)
-            user_service.add_points(invitee.id, REFERRAL_POINTS_PER_SIDE)
-        except Exception as e:
-            current_app.logger.warning(f"add_points failed during referral bind: {e}")
+        locked_users = (
+            User.query
+            .filter(User.id.in_(sorted([referrer.id, invitee.id])))
+            .with_for_update()
+            .all()
+        )
+        locked_by_id = {user.id: user for user in locked_users}
+        locked_invitee = locked_by_id[invitee.id]
+        locked_referrer = locked_by_id[referrer.id]
+        locked_invitee.referrer_id = locked_referrer.id
+        locked_referrer.points = (locked_referrer.points or 0) + REFERRAL_POINTS_PER_SIDE
+        locked_invitee.points = (locked_invitee.points or 0) + REFERRAL_POINTS_PER_SIDE
+        db.session.add(Referral(
+            referrer_user_id=locked_referrer.id,
+            invitee_user_id=locked_invitee.id,
+        ))
         db.session.commit()
         return jsonify({'success': True, 'message': '推荐绑定成功'})
     except Exception as e:

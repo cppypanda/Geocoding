@@ -1,0 +1,178 @@
+import asyncio
+import unittest
+import requests
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from app import create_app, db
+from app.models import RechargeOrder, User
+from app.routes import geocoding
+from app.services import llm_service
+
+
+class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app(config_overrides={
+            'TESTING': True,
+            'SQLALCHEMY_DATABASE_URI': 'sqlite://',
+            'ZHIPUAI_KEY': None,
+            'ZHIPUAI_MODEL': 'glm-4.7-flash',
+            'DEEPSEEK_API_KEY': 'test-deepseek-key',
+            'DEEPSEEK_API_BASE': 'https://api.deepseek.com',
+            'DEEPSEEK_MODEL': 'deepseek-v4-flash',
+            'SECRET_KEY': 'model-routing-test',
+        })
+        self.context = self.app.app_context()
+        self.context.push()
+        db.create_all()
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.context.pop()
+
+    def _create_user(self, email):
+        user = User(email=email, points=100)
+        db.session.add(user)
+        db.session.commit()
+        return user
+
+    def test_geocoding_cascade_is_baidu_tianditu_amap(self):
+        calls = []
+
+        class FakeGeocoder:
+            def __init__(self, provider):
+                self.provider = provider
+
+            async def geocode(self, address, parsed_address=None):
+                calls.append(self.provider)
+                return {
+                    'source': self.provider,
+                    'formatted_address': address,
+                    'longitude_gcj02': 116.4,
+                    'latitude_gcj02': 39.9,
+                    'confidence': 0.1,
+                }
+
+        with (
+            patch.object(
+                geocoding.geocoding_apis,
+                'get_geocoder',
+                side_effect=lambda provider, user_id: FakeGeocoder(provider),
+            ),
+            patch.object(geocoding.address_processing, 'calculate_confidence_B', return_value=0.1),
+            patch.object(geocoding, '_post_process_winner', new=AsyncMock(side_effect=lambda winner, *_: winner)),
+        ):
+            result = asyncio.run(geocoding._get_best_geocode_result(
+                '测试地址', 1, {'province': '测试省'}, debug=True
+            ))
+
+        self.assertEqual(calls, ['baidu', 'tianditu', 'amap'])
+        self.assertEqual(
+            [item['api'] for item in result['all_results']],
+            ['baidu', 'tianditu', 'amap'],
+        )
+
+    def test_regular_user_uses_configured_glm_model(self):
+        user = self._create_user('regular@example.test')
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='ok')
+        )])
+        completion = MagicMock(return_value=response)
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+
+        result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id, max_retries=1))
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['provider'], 'zhipuai')
+        self.assertEqual(result['model'], 'glm-4.7-flash')
+        self.assertEqual(completion.call_args.kwargs['model'], 'glm-4.7-flash')
+
+    @patch('app.services.llm_service.random.uniform', return_value=0)
+    @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
+    @patch('app.services.llm_service.requests.post')
+    def test_regular_user_falls_back_to_deepseek_after_glm_retries(
+            self, post, sleep, _uniform):
+        user = self._create_user('glm-fallback@example.test')
+        completion = MagicMock(side_effect=RuntimeError('temporary GLM failure'))
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+        http_response = MagicMock()
+        http_response.json.return_value = {
+            'choices': [{'message': {'content': 'deepseek-fallback-ok'}}]
+        }
+        post.return_value = http_response
+
+        result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id))
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(completion.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.await_args_list], [1, 2])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(result['provider'], 'deepseek')
+        self.assertEqual(result['fallback_from'], 'zhipuai')
+
+    @patch('app.services.llm_service.random.uniform', return_value=0)
+    @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
+    @patch('app.services.llm_service.requests.post', side_effect=requests.Timeout('timeout'))
+    def test_recharge_member_falls_back_to_glm_after_deepseek_retries(
+            self, post, sleep, _uniform):
+        user = self._create_user('deepseek-fallback@example.test')
+        db.session.add(RechargeOrder(
+            user_id=user.id,
+            order_number='paid-order-fallback',
+            package_name='测试套餐',
+            amount=10.0,
+            points=200,
+            status='COMPLETED',
+        ))
+        db.session.commit()
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content='glm-fallback-ok')
+        )])
+        completion = MagicMock(return_value=response)
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+
+        result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id))
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.await_args_list], [1, 2])
+        self.assertEqual(completion.call_count, 1)
+        self.assertEqual(result['provider'], 'zhipuai')
+        self.assertEqual(result['fallback_from'], 'deepseek')
+
+    @patch('app.services.llm_service.requests.post')
+    def test_recharge_member_uses_deepseek_flash_without_thinking(self, post):
+        user = self._create_user('member@example.test')
+        db.session.add(RechargeOrder(
+            user_id=user.id,
+            order_number='paid-order-1',
+            package_name='测试套餐',
+            amount=10.0,
+            points=200,
+            status='COMPLETED',
+        ))
+        db.session.commit()
+        http_response = MagicMock()
+        http_response.json.return_value = {
+            'choices': [{'message': {'content': 'member-ok'}}]
+        }
+        post.return_value = http_response
+
+        result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id, max_retries=1))
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['provider'], 'deepseek')
+        payload = post.call_args.kwargs['json']
+        self.assertEqual(payload['model'], 'deepseek-v4-flash')
+        self.assertEqual(payload['thinking'], {'type': 'disabled'})
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,126 @@
+{% extends "admin/base.html" %}
+
+{% block title %}报错中心{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1"><i class="bi bi-bug-fill text-danger"></i> 报错中心</h1>
+        <p class="text-muted mb-0">自动汇总服务端异常和错误日志，相同问题会合并计数。</p>
+    </div>
+    <div class="text-end small text-muted">
+        累计捕获 <strong class="text-dark">{{ total_occurrences }}</strong> 次错误
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    {% set status_cards = [
+        ('open', '未处理', 'danger'),
+        ('in_progress', '处理中', 'warning'),
+        ('resolved', '已解决', 'success'),
+        ('ignored', '已忽略', 'secondary')
+    ] %}
+    {% for value, label, color in status_cards %}
+    <div class="col-6 col-lg-3">
+        <a class="text-decoration-none" href="{{ url_for('admin.error_center', status=value) }}">
+            <div class="card border-{{ color }} h-100">
+                <div class="card-body py-3">
+                    <div class="text-muted small">{{ label }}</div>
+                    <div class="fs-3 fw-bold text-{{ color }}">{{ status_counts.get(value, 0) }}</div>
+                </div>
+            </div>
+        </a>
+    </div>
+    {% endfor %}
+</div>
+
+<form class="card card-body mb-4" method="get">
+    <div class="row g-2 align-items-end">
+        <div class="col-md-3">
+            <label class="form-label">状态</label>
+            <select class="form-select" name="status">
+                <option value="all" {{ 'selected' if status_filter == 'all' else '' }}>全部状态</option>
+                <option value="open" {{ 'selected' if status_filter == 'open' else '' }}>未处理</option>
+                <option value="in_progress" {{ 'selected' if status_filter == 'in_progress' else '' }}>处理中</option>
+                <option value="resolved" {{ 'selected' if status_filter == 'resolved' else '' }}>已解决</option>
+                <option value="ignored" {{ 'selected' if status_filter == 'ignored' else '' }}>已忽略</option>
+            </select>
+        </div>
+        <div class="col-md-2">
+            <label class="form-label">级别</label>
+            <select class="form-select" name="severity">
+                <option value="" {{ 'selected' if not severity_filter else '' }}>全部级别</option>
+                <option value="critical" {{ 'selected' if severity_filter == 'critical' else '' }}>严重</option>
+                <option value="error" {{ 'selected' if severity_filter == 'error' else '' }}>错误</option>
+            </select>
+        </div>
+        <div class="col-md-5">
+            <label class="form-label">搜索</label>
+            <input class="form-control" name="q" value="{{ keyword }}" placeholder="错误内容、类型、接口路径或指纹">
+        </div>
+        <div class="col-md-2 d-grid">
+            <button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> 筛选</button>
+        </div>
+    </div>
+</form>
+
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>状态</th>
+                    <th>错误</th>
+                    <th>接口</th>
+                    <th>次数</th>
+                    <th>最近发生</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in pagination.items %}
+                <tr>
+                    <td>
+                        {% if item.status == 'open' %}<span class="badge bg-danger">未处理</span>
+                        {% elif item.status == 'in_progress' %}<span class="badge bg-warning text-dark">处理中</span>
+                        {% elif item.status == 'resolved' %}<span class="badge bg-success">已解决</span>
+                        {% else %}<span class="badge bg-secondary">已忽略</span>{% endif %}
+                        {% if item.severity == 'critical' %}<span class="badge bg-dark">严重</span>{% endif %}
+                    </td>
+                    <td style="min-width: 300px; max-width: 560px;">
+                        <div class="fw-semibold text-break">{{ item.exception_type }}</div>
+                        <div class="small text-muted text-truncate" style="max-width: 540px;" title="{{ item.message }}">{{ item.message }}</div>
+                    </td>
+                    <td>
+                        <code>{{ item.request_method or '-' }} {{ item.request_path or item.source or '-' }}</code>
+                    </td>
+                    <td><span class="badge bg-light text-dark border">{{ item.occurrence_count }}</span></td>
+                    <td class="text-nowrap">{{ item.last_seen_at|to_beijing_time }}</td>
+                    <td>
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('admin.error_detail', error_id=item.id) }}">详情</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-5">当前筛选条件下没有错误记录。</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if pagination.pages > 1 %}
+<nav class="mt-4" aria-label="报错分页">
+    <ul class="pagination justify-content-center">
+        {% for page_num in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+            {% if page_num %}
+                <li class="page-item {{ 'active' if page_num == pagination.page else '' }}">
+                    <a class="page-link" href="{{ url_for('admin.error_center', page=page_num, status=status_filter, severity=severity_filter, q=keyword) }}">{{ page_num }}</a>
+                </li>
+            {% else %}
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+            {% endif %}
+        {% endfor %}
+    </ul>
+</nav>
+{% endif %}
+{% endblock %}

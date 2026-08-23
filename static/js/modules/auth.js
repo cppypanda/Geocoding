@@ -191,7 +191,11 @@ export async function checkLoginStatus() {
 export async function handleLogout(event) {
     if (event) event.preventDefault();
     try {
-        const response = await fetch(ENDPOINTS.logout);
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        const response = await fetch(ENDPOINTS.logout, {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken}
+        });
         const data = await response.json();
         if (data.success) {
             updateUserBar(null);

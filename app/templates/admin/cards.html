@@ -1,0 +1,145 @@
+{% extends "admin/base.html" %}
+
+{% block title %}卡密管理{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">卡密管理</h1>
+    <div>
+        <a href="{{ url_for('payment_bp.admin_cards_export', status='unused') }}" class="btn btn-outline-success btn-sm">
+            <i class="bi bi-download"></i> 导出未使用卡密
+        </a>
+    </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-plus-circle"></i> 批量生成卡密</h5>
+    </div>
+    <div class="card-body">
+        <form method="post" action="{{ url_for('payment_bp.admin_cards') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+            <input type="hidden" name="action" value="generate"/>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">生成数量</label>
+                    <input type="number" class="form-control" name="count" min="1" max="1000" value="10" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">每张积分面值</label>
+                    <input type="number" class="form-control" name="points" min="1" value="100" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">有效期（天，留空=永不过期）</label>
+                    <input type="number" class="form-control" name="expires_days" min="1" placeholder="可选">
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-magic"></i> 生成卡密
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'ALL' %}active{% endif %}" href="{{ url_for('payment_bp.admin_cards', status='ALL') }}">全部</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'unused' %}active{% endif %}" href="{{ url_for('payment_bp.admin_cards', status='unused') }}">未使用</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if selected_status == 'used' %}active{% endif %}" href="{{ url_for('payment_bp.admin_cards', status='used') }}">已使用</a>
+    </li>
+</ul>
+
+{% if cards_pagination.items %}
+<div class="card shadow-sm">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th scope="col">ID</th>
+                    <th scope="col">卡密</th>
+                    <th scope="col">积分</th>
+                    <th scope="col">状态</th>
+                    <th scope="col">使用者</th>
+                    <th scope="col">使用时间</th>
+                    <th scope="col">过期时间</th>
+                    <th scope="col">创建时间</th>
+                    <th scope="col" class="text-center">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for card in cards_pagination.items %}
+                <tr>
+                    <td>{{ card.id }}</td>
+                    <td><code class="fs-6">{{ card.code }}</code></td>
+                    <td><span class="badge bg-primary">{{ card.points }}</span></td>
+                    <td>
+                        {% if card.is_used %}
+                            <span class="badge bg-secondary">已使用</span>
+                        {% elif card.expires_at and card.expires_at < now %}
+                            <span class="badge bg-dark">已过期</span>
+                        {% else %}
+                            <span class="badge bg-success">未使用</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.user %}
+                            {{ card.user.email }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td>{{ card.used_at.strftime('%Y-%m-%d %H:%M') if card.used_at else '-' }}</td>
+                    <td>{{ card.expires_at.strftime('%Y-%m-%d %H:%M') if card.expires_at else '永不过期' }}</td>
+                    <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td class="text-center">
+                        {% if not card.is_used %}
+                        <form method="post" action="{{ url_for('payment_bp.admin_cards') }}" class="d-inline" onsubmit="return confirm('确定删除此卡密？');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <input type="hidden" name="action" value="delete"/>
+                            <input type="hidden" name="card_id" value="{{ card.id }}"/>
+                            <button type="submit" class="btn btn-outline-danger btn-sm">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<nav aria-label="Page navigation" class="mt-3">
+    <ul class="pagination justify-content-center">
+        <li class="page-item {% if not cards_pagination.has_prev %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('payment_bp.admin_cards', page=cards_pagination.prev_num, status=selected_status) }}">上一页</a>
+        </li>
+        {% for page_num in cards_pagination.iter_pages() %}
+            {% if page_num %}
+                <li class="page-item {% if page_num == cards_pagination.page %}active{% endif %}">
+                    <a class="page-link" href="{{ url_for('payment_bp.admin_cards', page=page_num, status=selected_status) }}">{{ page_num }}</a>
+                </li>
+            {% else %}
+                <li class="page-item disabled"><a class="page-link" href="#">...</a></li>
+            {% endif %}
+        {% endfor %}
+        <li class="page-item {% if not cards_pagination.has_next %}disabled{% endif %}">
+            <a class="page-link" href="{{ url_for('payment_bp.admin_cards', page=cards_pagination.next_num, status=selected_status) }}">下一页</a>
+        </li>
+    </ul>
+</nav>
+
+{% else %}
+<div class="alert alert-info text-center" role="alert">
+    <h4 class="alert-heading">暂无卡密</h4>
+    <p>请使用上方表单生成卡密。</p>
+</div>
+{% endif %}
+{% endblock %}

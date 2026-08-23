@@ -144,308 +144,281 @@ function initializeButtons() {
     // 充值相关按钮
     const showRechargeModalBtn = document.getElementById('showRechargeModalBtn');
     const rechargeBtn = document.getElementById('rechargeBtn');
-    // 充值流程DOM
-    const rechargePackageList = document.getElementById('rechargePackageList');
-    const paymentMethodList = document.getElementById('paymentMethodList');
-    const amountToPayAlipay = document.getElementById('amountToPayAlipay');
-    const amountToPayWechat = document.getElementById('amountToPayWechat');
-    const agreeRechargeTerms = document.getElementById('agreeRechargeTerms');
-    const initiateAlipayBtn = document.getElementById('initiateAlipayBtn');
-    const confirmWechatPaymentBtn = document.getElementById('confirmWechatPaymentBtn');
+    const rechargePackageCards = Array.from(document.querySelectorAll('.recharge-package-card'));
+    const initiateRechargePaymentBtn = document.getElementById('initiateRechargePaymentBtn');
+    const paymentStatus = document.getElementById('paymentStatus');
+    const paymentOrderDetails = document.getElementById('paymentOrderDetails');
+    const paymentOrderNumber = document.getElementById('paymentOrderNumber');
+    const reopenPaymentLink = document.getElementById('reopenPaymentLink');
+    const cardCodeInput = document.getElementById('cardCodeInput');
+    const redeemCardBtn = document.getElementById('redeemCardBtn');
+    const redeemResult = document.getElementById('redeemResult');
+    let selectedRechargePackage = rechargePackageCards[0]?.dataset.packageId || null;
+    let currentRechargeOrder = null;
+    let rechargePollTimer = null;
 
-    // 微信支付相关DOM
-    const alipayInfoArea = document.getElementById('alipay-info-area');
-    const wechatQrArea = document.getElementById('wechat-qr-area');
-    const paymentQrCode = document.getElementById('paymentQrCode');
-    const orderNumberDisplay = document.getElementById('orderNumberDisplay');
-    const copyOrderNumberBtn = document.getElementById('copyOrderNumberBtn');
-
-    // 充值流程状态
-    let selectedPackageId = null;
-    let selectedPaymentMethod = null; // 'alipay' | 'wechat'
-    let currentRechargeOrder = null; // 存储当前创建的订单
-
-    function resetRechargeFlow() {
-        selectedPackageId = null;
-        selectedPaymentMethod = null;
-        currentRechargeOrder = null;
-        // 视觉重置
-        if (rechargePackageList) {
-            rechargePackageList.querySelectorAll('.recharge-package-card').forEach(card => card.classList.remove('selected'));
-        }
-        if (paymentMethodList) {
-            paymentMethodList.querySelectorAll('.payment-method-btn').forEach(btn => {
-                btn.classList.remove('active');
-                btn.disabled = true;
-            });
-        }
-        if (amountToPayAlipay) amountToPayAlipay.textContent = '0.00';
-        if (amountToPayWechat) amountToPayWechat.textContent = '0.00';
-        if (orderNumberDisplay) orderNumberDisplay.value = '';
-
-        // UI 切换
-        if (alipayInfoArea) alipayInfoArea.style.display = 'none';
-        if (wechatQrArea) wechatQrArea.style.display = 'none';
-        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
-        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'none';
-
-        updatePaymentButtonStates();
+    function csrfToken() {
+        return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     }
 
-    function updatePaymentButtonStates() {
-        const termsOk = !!(agreeRechargeTerms && agreeRechargeTerms.checked);
-        const ready = !!(selectedPackageId && selectedPaymentMethod);
-        if (initiateAlipayBtn) initiateAlipayBtn.disabled = !(termsOk && ready);
-        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.disabled = !(termsOk && ready);
+    function stopRechargePolling() {
+        if (rechargePollTimer) {
+            clearTimeout(rechargePollTimer);
+            rechargePollTimer = null;
+        }
+    }
+
+    function showPaymentStatus(message, type = 'info') {
+        if (!paymentStatus) return;
+        paymentStatus.className = `alert alert-${type}`;
+        paymentStatus.textContent = message;
+    }
+
+    async function pollRechargeOrder(orderNumber, attemptsLeft = 150) {
+        if (!orderNumber || attemptsLeft <= 0) {
+            showPaymentStatus('支付状态确认超时。若已付款，积分会在支付回调到达后自动到账。', 'warning');
+            return;
+        }
+        try {
+            const resp = await fetch(`/api/pay/recharge/order?order_number=${encodeURIComponent(orderNumber)}`);
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.message || '查询支付状态失败');
+
+            currentRechargeOrder = data.order;
+            if (data.order.status === 'COMPLETED') {
+                stopRechargePolling();
+                showPaymentStatus(`支付成功，${data.order.points} 积分已到账。`, 'success');
+                if (data.total_points !== undefined && data.total_points !== null) {
+                    const userPointsEl = document.getElementById('user-points');
+                    if (userPointsEl) userPointsEl.textContent = data.total_points;
+                    if (window.currentUser) window.currentUser.points = data.total_points;
+                }
+                if (initiateRechargePaymentBtn) {
+                    initiateRechargePaymentBtn.disabled = true;
+                    initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-check-circle me-1"></i> 已到账';
+                }
+                return;
+            }
+            if (data.order.status === 'CANCELLED') {
+                stopRechargePolling();
+                showPaymentStatus('订单已关闭，请重新创建支付订单。', 'warning');
+                if (initiateRechargePaymentBtn) initiateRechargePaymentBtn.disabled = false;
+                return;
+            }
+            showPaymentStatus(data.warning || '等待支付完成，系统正在自动确认到账状态…', data.warning ? 'warning' : 'info');
+        } catch (err) {
+            showPaymentStatus(err.message || '支付状态查询暂时失败，稍后会自动重试。', 'warning');
+        }
+        rechargePollTimer = setTimeout(() => pollRechargeOrder(orderNumber, attemptsLeft - 1), 4000);
+    }
+
+    function resetRechargeFlow() {
+        stopRechargePolling();
+        currentRechargeOrder = null;
+        selectedRechargePackage = rechargePackageCards[0]?.dataset.packageId || null;
+        rechargePackageCards.forEach((card, index) => {
+            card.classList.toggle('border-primary', index === 0);
+            card.classList.toggle('shadow-sm', index === 0);
+        });
+        if (paymentStatus) {
+            paymentStatus.className = 'alert d-none';
+            paymentStatus.textContent = '';
+        }
+        if (paymentOrderDetails) paymentOrderDetails.classList.add('d-none');
+        if (paymentOrderNumber) paymentOrderNumber.textContent = '';
+        if (reopenPaymentLink) reopenPaymentLink.href = '#';
+        if (initiateRechargePaymentBtn) {
+            initiateRechargePaymentBtn.disabled = false;
+            initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-alipay me-1"></i> 立即支付';
+        }
+        if (cardCodeInput) cardCodeInput.value = '';
+        if (redeemResult) {
+            redeemResult.classList.add('d-none');
+            redeemResult.className = 'alert d-none';
+            redeemResult.textContent = '';
+        }
+        if (redeemCardBtn) {
+            redeemCardBtn.disabled = false;
+            redeemCardBtn.innerHTML = '<i class="bi bi-check-circle me-1"></i> 立即兑换';
+        }
     }
 
     // 当打开充值模态时，重置流程
     if (showRechargeModalBtn) {
         showRechargeModalBtn.addEventListener('click', () => {
-            // 显示充值模态框
             const modal = new bootstrap.Modal(document.getElementById('rechargeModal'));
             modal.show();
-            // 延迟到模态显示后执行重置，避免闪烁
             setTimeout(resetRechargeFlow, 50);
         });
     }
     if (rechargeBtn) {
         rechargeBtn.addEventListener('click', () => {
-            // 显示充值模态框
             const modal = new bootstrap.Modal(document.getElementById('rechargeModal'));
             modal.show();
             setTimeout(resetRechargeFlow, 50);
         });
     }
 
-    // 套餐选择
-    if (rechargePackageList) {
-        rechargePackageList.addEventListener('click', (e) => {
-            const card = e.target.closest('.recharge-package-card');
-            if (!card) return;
-            // 标记选中
-            rechargePackageList.querySelectorAll('.recharge-package-card').forEach(el => el.classList.remove('selected'));
-            card.classList.add('selected');
-            selectedPackageId = card.getAttribute('data-package-id');
-            currentRechargeOrder = null; // 套餐变更，清除已创建的订单
-            // 选择套餐后，启用支付方式按钮
-            if (paymentMethodList) {
-                paymentMethodList.querySelectorAll('.payment-method-btn').forEach(btn => btn.disabled = false);
+    rechargePackageCards.forEach(card => {
+        card.addEventListener('click', () => {
+            selectedRechargePackage = card.dataset.packageId;
+            currentRechargeOrder = null;
+            stopRechargePolling();
+            rechargePackageCards.forEach(item => {
+                const selected = item === card;
+                item.classList.toggle('border-primary', selected);
+                item.classList.toggle('shadow-sm', selected);
+            });
+            if (paymentStatus) paymentStatus.className = 'alert d-none';
+            if (paymentOrderDetails) paymentOrderDetails.classList.add('d-none');
+            if (initiateRechargePaymentBtn) {
+                initiateRechargePaymentBtn.disabled = false;
+                initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-alipay me-1"></i> 立即支付';
             }
-            // 如果支付方式已选，则更新价格和UI
-            if(selectedPaymentMethod) {
-                updatePriceAndUIVisibility();
-            }
-            updatePaymentButtonStates();
         });
-    }
+    });
 
-    function updatePriceAndUIVisibility() {
-        let priceText = '';
-        try {
-            const selectedCard = rechargePackageList && rechargePackageList.querySelector('.recharge-package-card.selected');
-            if (selectedCard) {
-                // 优先使用 class 选择器，兼容旧结构则使用 nth-child(3) 或 nth-child(2)
-                const priceDiv = selectedCard.querySelector('.package-real-price') || 
-                                 selectedCard.querySelector('div:nth-child(3)') || 
-                                 selectedCard.querySelector('div:nth-child(2)');
-                if (priceDiv) priceText = priceDiv.textContent || '';
-            }
-        } catch (e) {}
-        const match = priceText.match(/([0-9]+(?:\.[0-9]{1,2})?)/);
-        const parsedAmount = match ? parseFloat(match[1]).toFixed(2) : '0.00';
-        
-        // 无论是支付宝还是微信，都显示二维码区域
-        const amountForQr = parsedAmount ? (Number(parsedAmount)).toString() : '';
-        
-        if (amountToPayWechat) amountToPayWechat.textContent = parsedAmount;
-        if (alipayInfoArea) alipayInfoArea.style.display = 'none';
-        if (wechatQrArea) wechatQrArea.style.display = 'block';
-        
-        // 隐藏旧的支付宝跳转按钮
-        if (initiateAlipayBtn) initiateAlipayBtn.style.display = 'none';
-        // 显示统一的确认按钮（复用 confirmWechatPaymentBtn）
-        if (confirmWechatPaymentBtn) confirmWechatPaymentBtn.style.display = 'inline-block';
-        
-        if (selectedPaymentMethod === 'alipay') {
-            setQrImageFor('alipay', amountForQr);
-        } else if (selectedPaymentMethod === 'wechat') {
-            setQrImageFor('wechat', amountForQr);
-        }
-        
-        // 为选定的支付方式提前创建订单以显示订单号
-        createRechargeOrderIfNeeded();
-    }
-
-    // 支付方式选择
-    if (paymentMethodList) {
-        paymentMethodList.addEventListener('click', async (e) => {
-            const btn = e.target.closest('.payment-method-btn');
-            if (!btn || btn.disabled) return;
-            // 高亮当前选择
-            paymentMethodList.querySelectorAll('.payment-method-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            selectedPaymentMethod = btn.getAttribute('data-method');
-            
-            // 确保已选择套餐
-            if (!selectedPackageId) {
+    if (initiateRechargePaymentBtn) {
+        initiateRechargePaymentBtn.addEventListener('click', async () => {
+            if (!selectedRechargePackage) {
                 showToast('请先选择充值套餐', 'warning');
                 return;
             }
 
-            updatePriceAndUIVisibility();
-            updatePaymentButtonStates();
-        });
-    }
-
-    function setQrImageFor(method, amount) {
-        if (!paymentQrCode) return;
-        const basePath = '/static/images/payment';
-        // 根据支付方式确定文件扩展名 (都使用 jpg)
-        const extension = 'jpg';
-        const fileName = amount ? `${amount}.${extension}` : '';
-        const src = `${basePath}/${method}/${fileName}`;
-        paymentQrCode.src = src;
-    }
-
-    // 协议勾选控制
-    if (agreeRechargeTerms) {
-        agreeRechargeTerms.addEventListener('change', updatePaymentButtonStates);
-    }
-    
-    // 复制订单号
-    if (copyOrderNumberBtn && orderNumberDisplay) {
-        copyOrderNumberBtn.addEventListener('click', async () => {
-            if (!orderNumberDisplay.value) {
-                showToast('无可复制的订单号', 'warning');
-                return;
-            }
+            // 先同步打开空白页，避免异步请求完成后被浏览器拦截弹窗。
+            const paymentWindow = window.open('', '_blank');
+            initiateRechargePaymentBtn.disabled = true;
+            initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> 正在创建订单…';
+            showPaymentStatus('正在连接支付服务…', 'info');
             try {
-                await navigator.clipboard.writeText(orderNumberDisplay.value);
-                showToast('订单号已复制', 'success');
-            } catch (e) {
-                orderNumberDisplay.select();
-                document.execCommand && document.execCommand('copy');
-                showToast('已尝试复制订单号', 'info');
-            }
-        });
-    }
-
-    async function createRechargeOrderIfNeeded() {
-        if (currentRechargeOrder) return currentRechargeOrder; // 如果已创建订单，直接返回
-        if (!selectedPackageId) return null;
-        try {
-            // 从 meta 标签获取 CSRF token
-            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-            
-            const resp = await fetch('/create_recharge_order', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': csrfToken // 添加 CSRF token
-                },
-                body: JSON.stringify({ 
-                    package_id: selectedPackageId,
-                    payment_method: selectedPaymentMethod
-                })
-            });
-            if (resp.status === 401) {
-                showToast('请先登录后再充值', 'warning');
-                const loginModalElement = document.getElementById('loginRegisterModal');
-                if (loginModalElement) {
-                    new bootstrap.Modal(loginModalElement).show();
-                }
-                return null;
-            }
-            const data = await resp.json();
-            if (!resp.ok || !data.success) {
-                showToast(data.message || '创建订单失败', 'danger');
-                return null;
-            }
-            const order = { order_number: data.order_number, amount: data.amount };
-            
-            currentRechargeOrder = order; // 缓存订单
-            // 创建成功后立即显示订单号
-            if (orderNumberDisplay) orderNumberDisplay.value = order.order_number;
-            
-            return order;
-        } catch (err) {
-            showToast('网络异常，创建订单失败', 'danger');
-            return null;
-        }
-    }
-
-    // 前往支付宝支付
-    if (initiateAlipayBtn) {
-        initiateAlipayBtn.addEventListener('click', async () => {
-            if (!selectedPackageId || !selectedPaymentMethod) {
-                showToast('请先选择套餐和支付方式', 'warning');
-                return;
-            }
-            if (selectedPaymentMethod !== 'alipay') {
-                showToast('暂不支持此支付方式，敬请期待', 'info');
-                return;
-            }
-
-            initiateAlipayBtn.disabled = true;
-            initiateAlipayBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 正在创建订单...';
-
-            try {
-                // 1. 创建订单
-                const order = await createRechargeOrderIfNeeded();
-                if (!order) {
-                    throw new Error('创建订单失败');
-                }
-                
-                initiateAlipayBtn.innerHTML = '<i class="bi bi-shield-lock"></i> 正在生成安全支付链接...';
-
-                // 2. 获取支付链接
-                const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-                const paymentResp = await fetch('/initiate_payment', {
+                const resp = await fetch('/api/pay/recharge/create', {
                     method: 'POST',
-                    headers: { 
+                    headers: {
                         'Content-Type': 'application/json',
-                        'X-CSRFToken': csrfToken // 添加 CSRF token
+                        'X-CSRFToken': csrfToken()
                     },
-                    body: JSON.stringify({ order_number: order.order_number })
+                    body: JSON.stringify({ package_id: selectedRechargePackage })
                 });
-                const paymentData = await paymentResp.json();
-                if (!paymentResp.ok || !paymentData.success) {
-                    throw new Error(paymentData.message || '获取支付链接失败');
+                if (resp.status === 401) {
+                    if (paymentWindow) paymentWindow.close();
+                    showToast('请先登录后再充值', 'warning');
+                    bootstrap.Modal.getInstance(document.getElementById('rechargeModal'))?.hide();
+                    const loginModalElement = document.getElementById('loginRegisterModal');
+                    if (loginModalElement) new bootstrap.Modal(loginModalElement).show();
+                    return;
                 }
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.message || '创建支付订单失败');
 
-                // 3. 跳转到支付页面
-                window.location.href = paymentData.payment_url;
+                currentRechargeOrder = data.order;
+                if (paymentOrderNumber) paymentOrderNumber.textContent = data.order.order_number;
+                if (reopenPaymentLink) reopenPaymentLink.href = data.order.payment_url;
+                if (paymentOrderDetails) paymentOrderDetails.classList.remove('d-none');
+                showPaymentStatus('支付页面已打开，请在支付宝完成付款。本页面会自动确认到账。', 'info');
+                initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> 等待支付';
 
+                if (paymentWindow) {
+                    paymentWindow.location.href = data.order.payment_url;
+                } else {
+                    window.open(data.order.payment_url, '_blank', 'noopener');
+                }
+                pollRechargeOrder(data.order.order_number);
             } catch (err) {
-                showToast(err.message, 'danger');
-                // 发生错误，重新启用按钮
-                initiateAlipayBtn.disabled = false;
-                initiateAlipayBtn.innerHTML = '<i class="bi bi-shield-check"></i> 前往支付宝安全支付';
+                if (paymentWindow) paymentWindow.close();
+                showPaymentStatus(err.message || '创建支付订单失败，请稍后重试。', 'danger');
+                initiateRechargePaymentBtn.disabled = false;
+                initiateRechargePaymentBtn.innerHTML = '<i class="bi bi-alipay me-1"></i> 重新支付';
             }
         });
     }
 
-    // 确认支付（手动）- 复用 confirmWechatPaymentBtn
-    if (confirmWechatPaymentBtn) {
-        confirmWechatPaymentBtn.addEventListener('click', async () => {
-            if (!selectedPackageId || !selectedPaymentMethod || !currentRechargeOrder) {
-                showToast('请先选择套餐并生成订单', 'warning');
+    const rechargeModalElement = document.getElementById('rechargeModal');
+    if (rechargeModalElement) {
+        rechargeModalElement.addEventListener('hidden.bs.modal', stopRechargePolling);
+    }
+
+    // 卡密兑换
+    if (redeemCardBtn) {
+        redeemCardBtn.addEventListener('click', async () => {
+            const code = (cardCodeInput.value || '').trim().toUpperCase();
+            if (!code) {
+                showToast('请输入卡密', 'warning');
                 return;
             }
-            
-            showToast('已记录您的支付意向，请等待管理员后台确认到账后为您发放积分。', 'info');
-            
-            // 关闭模态
-            try {
-                const el = document.getElementById('rechargeModal');
-                if (el) {
-                    const modal = bootstrap.Modal.getInstance(el) || new bootstrap.Modal(el);
-                    modal.hide();
-                }
-            } catch (e) {}
 
-            // 按钮状态在模态框关闭后由 resetRechargeFlow 重置
+            redeemCardBtn.disabled = true;
+            redeemCardBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 兑换中...';
+
+            try {
+                const resp = await fetch('/redeem_card', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrfToken()
+                    },
+                    body: JSON.stringify({ code: code })
+                });
+
+                if (resp.status === 401) {
+                    showToast('请先登录后再兑换', 'warning');
+                    const loginModalElement = document.getElementById('loginRegisterModal');
+                    if (loginModalElement) {
+                        new bootstrap.Modal(loginModalElement).show();
+                    }
+                    resetRechargeFlow();
+                    return;
+                }
+
+                const data = await resp.json();
+
+                if (redeemResult) {
+                    redeemResult.classList.remove('d-none');
+                    if (data.success) {
+                        redeemResult.className = 'alert alert-success';
+                        redeemResult.replaceChildren();
+                        const successIcon = document.createElement('i');
+                        successIcon.className = 'bi bi-check-circle-fill me-1';
+                        redeemResult.append(successIcon, document.createTextNode(data.message || '兑换成功'));
+                        // 更新页面上的积分显示
+                        const userPointsEl = document.getElementById('user-points');
+                        if (userPointsEl && data.total_points !== undefined) {
+                            userPointsEl.textContent = data.total_points;
+                        }
+                        setTimeout(() => {
+                            const el = document.getElementById('rechargeModal');
+                            if (el) {
+                                const modal = bootstrap.Modal.getInstance(el);
+                                if (modal) modal.hide();
+                            }
+                        }, 1500);
+                    } else {
+                        redeemResult.className = 'alert alert-danger';
+                        redeemResult.replaceChildren();
+                        const failureIcon = document.createElement('i');
+                        failureIcon.className = 'bi bi-x-circle-fill me-1';
+                        redeemResult.append(failureIcon, document.createTextNode(data.message || '兑换失败'));
+                    }
+                }
+            } catch (err) {
+                if (redeemResult) {
+                    redeemResult.classList.remove('d-none');
+                    redeemResult.className = 'alert alert-danger';
+                    redeemResult.innerHTML = '<i class="bi bi-x-circle-fill me-1"></i> 网络异常，请稍后重试';
+                }
+            } finally {
+                redeemCardBtn.disabled = false;
+                redeemCardBtn.innerHTML = '<i class="bi bi-check-circle me-1"></i> 立即兑换';
+            }
+        });
+    }
+
+    // 回车提交
+    if (cardCodeInput) {
+        cardCodeInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (redeemCardBtn) redeemCardBtn.click();
+            }
         });
     }
     
@@ -1187,7 +1160,11 @@ setInterval(syncUserStatus, 3000);
 // 退出登录处理
 async function handleLogout() {
     try {
-        const response = await fetch('/logout');
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+        const response = await fetch('/logout', {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrfToken}
+        });
         
         if (response.ok) {
             // 清除用户状态

@@ -1,4 +1,4 @@
-import { getApiName, getApiBadgeColor, formatConfidence, formatCoordinatesHtml, buildTableRows } from './utils.js';
+import { getApiName, getApiBadgeColor, formatConfidence, formatCoordinatesHtml, buildTableRows, escapeHtml } from './utils.js';
 
 /**
  * Creates the HTML for action buttons in a table row.
@@ -187,7 +187,7 @@ export function displayMapSearchResults(tableBody, results, originalKeyword) {
     if (titleElement && results[0].source_display_name) {
         const sourceName = results[0].source_display_name;
         // console.log("[DEBUG-UI] Source name found:", sourceName);
-        titleElement.innerHTML = `地图搜索结果 <small class="text-muted"> - ${sourceName}</small>`;
+        titleElement.innerHTML = `地图搜索结果 <small class="text-muted"> - ${escapeHtml(sourceName)}</small>`;
     } else {
         // console.log("[DEBUG-UI] Source name NOT found or title element missing.");
     }
@@ -227,9 +227,9 @@ export function displayMapSearchResults(tableBody, results, originalKeyword) {
 
         row.innerHTML = `
             <td class="text-center">${index + 1}</td>
-            <td>${result.name || '-'}</td>
-            <td>${result.address || '-'}</td>
-            <td>${result.pname || ''}${result.cityname || ''}${result.adname || ''}</td>
+            <td>${escapeHtml(result.name || '-')}</td>
+            <td>${escapeHtml(result.address || '-')}</td>
+            <td>${escapeHtml(`${result.pname || ''}${result.cityname || ''}${result.adname || ''}`)}</td>
             <td class="text-center">${confidenceText}</td>
             <td class="text-center">
                 <button class="${buttonClass}" title="选择此点">

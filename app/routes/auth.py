@@ -1,16 +1,18 @@
 import re
-import time
-import random
-import os
+import hashlib
+import hmac
+import secrets
 import json # For image_paths in feedback, though feedback routes go to user.py
+from datetime import datetime, timedelta
 
-from flask import Blueprint, request, jsonify, session, current_app
+from flask import Blueprint, request, jsonify, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import login_user, logout_user, current_user
 
 from .. import config # 导入顶层配置
 from ..services import user_service, email_service # 导入用户和邮件服务
-from ..models import User # Import User model
+from .. import db
+from ..models import EmailVerificationCode, User
 
 auth_bp = Blueprint('auth', __name__) # 移除 url_prefix
 
@@ -31,10 +33,62 @@ def _check_and_sync_admin_status(user):
         user_service.update_admin_status(user, should_be_admin)
         current_app.logger.info(f"Admin status for {user.email} synchronized to {should_be_admin}.")
 
-# This cache is for temporary verification codes and does not need to be in the database.
-verification_codes_cache = {}
-# 兼容旧代码/测试中使用的名称（例如 sms_codes_cache）
-sms_codes_cache = verification_codes_cache
+_VERIFICATION_PURPOSES = {'register_login', 'reset_password', 'register_or_set_password'}
+_VERIFICATION_TTL = timedelta(minutes=5)
+_VERIFICATION_RESEND_INTERVAL = timedelta(seconds=60)
+_VERIFICATION_MAX_ATTEMPTS = 5
+
+
+def _normalize_email(email):
+    return (email or '').strip().lower()
+
+
+def _verification_digest(email, purpose, code):
+    payload = f'{email}|{purpose}|{code}'.encode('utf-8')
+    secret = current_app.config['SECRET_KEY'].encode('utf-8')
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
+def _consume_verification_code(email, code, purposes):
+    email = _normalize_email(email)
+    now = datetime.utcnow()
+    records = (
+        EmailVerificationCode.query
+        .filter(
+            EmailVerificationCode.email == email,
+            EmailVerificationCode.purpose.in_(purposes),
+        )
+        .with_for_update()
+        .all()
+    )
+    if not records:
+        return False, '请先获取验证码', 400
+
+    active = [record for record in records if record.expires_at > now]
+    if not active:
+        for record in records:
+            db.session.delete(record)
+        db.session.commit()
+        return False, '验证码已过期', 400
+
+    if all(record.attempt_count >= _VERIFICATION_MAX_ATTEMPTS for record in active):
+        return False, '验证码尝试次数过多，请重新获取', 429
+
+    for record in active:
+        if record.attempt_count >= _VERIFICATION_MAX_ATTEMPTS:
+            continue
+        expected = _verification_digest(email, record.purpose, code)
+        if hmac.compare_digest(record.code_digest, expected):
+            for item in records:
+                db.session.delete(item)
+            db.session.commit()
+            return True, None, 200
+
+    for record in active:
+        record.attempt_count += 1
+    db.session.commit()
+    remaining = max(0, _VERIFICATION_MAX_ATTEMPTS - max(r.attempt_count for r in active))
+    return False, f'验证码错误，还可尝试 {remaining} 次', 400
 
 @auth_bp.route('/send_verification_code', methods=['POST'])
 def send_verification_code():
@@ -43,34 +97,35 @@ def send_verification_code():
         current_app.logger.warning("Received empty JSON for send_verification_code")
         return jsonify({'success': False, 'message': '无效的请求'}), 400
         
-    email = data.get('email')
+    email = _normalize_email(data.get('email'))
     purpose = data.get('purpose', 'register_login') # 'register_login', 'reset_password', 'register_or_set_password'
-    current_app.logger.info(f"send_verification_code request received for email: {email}, purpose: {purpose}")
+    if purpose not in _VERIFICATION_PURPOSES:
+        return jsonify({'success': False, 'message': '无效的验证码用途'}), 400
 
     if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return jsonify({'success': False, 'message': '无效的邮箱地址'}), 400
 
-    # 频率限制 (例如60秒内不能重复发送)
-    cache_key = f"{email}_{purpose}"
-    last_sent_time = verification_codes_cache.get(cache_key, (None, 0))[1]
-    if time.time() - last_sent_time < 60:
-        return jsonify({'success': False, 'message': '请求过于频繁，请稍后再试'}), 429
-
     user = user_service.get_user_by_email(email)
 
     if purpose == 'reset_password' and not user:
-        return jsonify({'success': False, 'message': '该邮箱未注册'}), 404
+        # Do not reveal whether an account exists.
+        return jsonify({'success': True, 'message': '如果该邮箱已注册，验证码将发送至邮箱'}), 200
     
     if purpose == 'register_or_set_password':
         if user and user.password_hash != current_app.config['NO_PASSWORD_PLACEHOLDER']:
             return jsonify({'success': False, 'message': '该账号已注册，请直接登录或找回密码'}), 409
 
-    code = str(random.randint(100000, 999999))
-    
-    # [调试] 在后端日志中打印验证码
-    current_app.logger.info(f"为 {email} (用途: {purpose}) 生成的验证码是: {code}")
-    
-    # 发送邮件
+    now = datetime.utcnow()
+    record = (
+        EmailVerificationCode.query
+        .filter_by(email=email, purpose=purpose)
+        .with_for_update()
+        .first()
+    )
+    if record and now - record.last_sent_at < _VERIFICATION_RESEND_INTERVAL:
+        return jsonify({'success': False, 'message': '请求过于频繁，请稍后再试'}), 429
+
+    code = f'{secrets.randbelow(900000) + 100000:06d}'
     try:
         purpose_map = {
             'register_login': '注册或登录',
@@ -79,70 +134,40 @@ def send_verification_code():
         }
         purpose_text = purpose_map.get(purpose, purpose)
 
+        if record is None:
+            record = EmailVerificationCode(email=email, purpose=purpose)
+            db.session.add(record)
+        record.code_digest = _verification_digest(email, purpose, code)
+        record.attempt_count = 0
+        record.expires_at = now + _VERIFICATION_TTL
+        record.last_sent_at = now
+        # Reserve the unique email/purpose row before sending so concurrent requests
+        # cannot both send different codes while only one is persisted.
+        db.session.flush()
+
         subject = f"您的验证码是: {code}"
         body = f"您正在进行{purpose_text}操作，验证码为：<h1>{code}</h1>此验证码5分钟内有效。"
         email_service.send_email(email, subject, body)
+        db.session.commit()
     except Exception as e:
+        db.session.rollback()
         current_app.logger.error(f"发送验证码邮件失败: {e}")
         return jsonify({'success': False, 'message': '邮件发送失败，请稍后再试'}), 500
-
-    verification_codes_cache[cache_key] = (code, time.time(), purpose)
-    # 同步一份到用户会话，增强容错（例如进程重启/多实例）
-    try:
-        per_session_codes = session.get('verification_codes') or {}
-        per_session_codes[cache_key] = (code, time.time(), purpose)
-        session['verification_codes'] = per_session_codes
-    except Exception:
-        pass
     
     return jsonify({'success': True, 'message': '验证码已发送至您的邮箱'})
 
 @auth_bp.route('/login_register_email', methods=['POST'])
 def login_register_email():
     data = request.json
-    email = data.get('email')
+    email = _normalize_email(data.get('email'))
     code = data.get('code')
 
     if not email or not code:
         return jsonify({'success': False, 'message': '邮箱和验证码不能为空'}), 400
 
-    cache_key = f"{email}_register_login"
-    # 优先从用户会话中获取
-    per_session_codes = session.get('verification_codes') or {}
-    cached_data = per_session_codes.get(cache_key) or verification_codes_cache.get(cache_key)
-    if not cached_data:
-        return jsonify({'success': False, 'message': '请先获取验证码'}), 400
-
-    correct_code, timestamp, _ = cached_data
-    if time.time() - timestamp > 300 or code != correct_code:
-        if time.time() - timestamp > 300:
-            message = '验证码已过期'
-            try:
-                if cache_key in verification_codes_cache:
-                    del verification_codes_cache[cache_key]
-            except Exception:
-                pass
-            try:
-                if cache_key in per_session_codes:
-                    del per_session_codes[cache_key]
-                    session['verification_codes'] = per_session_codes
-            except Exception:
-                pass
-        else:
-            message = '验证码错误'
-        return jsonify({'success': False, 'message': message}), 400
-
-    try:
-        if cache_key in verification_codes_cache:
-            del verification_codes_cache[cache_key]
-    except Exception:
-        pass
-    try:
-        if cache_key in per_session_codes:
-            del per_session_codes[cache_key]
-            session['verification_codes'] = per_session_codes
-    except Exception:
-        pass
+    verified, message, status = _consume_verification_code(email, code, ('register_login',))
+    if not verified:
+        return jsonify({'success': False, 'message': message}), status
 
     user = user_service.get_user_by_email(email)
     new_user_created = False
@@ -174,10 +199,9 @@ def login_register_email():
     message = '注册并登录成功' if new_user_created else '登录成功'
     return jsonify({'success': True, 'message': message, 'user': user_info})
 
-@auth_bp.route('/logout', methods=['GET', 'POST'])
+@auth_bp.route('/logout', methods=['POST'])
 def logout():
     logout_user()
-    session.clear() # 清除所有 session 数据，防止 cookie 过大
     return jsonify({'success': True, 'message': '已退出登录'})
 
 @auth_bp.route('/check_login_status', methods=['GET'])
@@ -198,7 +222,7 @@ def check_login_status():
 @auth_bp.route('/register_set_password', methods=['POST'])
 def register_set_password():
     data = request.json
-    email = data.get('email', '').strip()
+    email = _normalize_email(data.get('email'))
     code = data.get('code', '').strip()
     password = data.get('password', '').strip()
     username = data.get('username', '').strip()
@@ -209,79 +233,13 @@ def register_set_password():
     if len(password) < 6:
         return jsonify({'success': False, 'message': '密码长度至少为6位'}), 400
 
-    # 兼容用户在“邮箱登录”入口获取验证码后切到“注册/设置密码”入口提交的情况
-    primary_key = f"{email}_register_or_set_password"
-    fallback_key = f"{email}_register_login"
-
-    now_ts = time.time()
-    per_session_codes = session.get('verification_codes') or {}
-    primary_data = per_session_codes.get(primary_key) or verification_codes_cache.get(primary_key)
-    fallback_data = per_session_codes.get(fallback_key) or verification_codes_cache.get(fallback_key)
-
-    if not primary_data and not fallback_data:
-        return jsonify({'success': False, 'message': '请先获取验证码'}), 400
-
-    # 构造候选集合，并判断是否匹配输入验证码
-    candidates = []
-    if primary_data:
-        candidates.append((primary_key, primary_data))
-    if fallback_data:
-        candidates.append((fallback_key, fallback_data))
-
-    # 先检测是否有过期项（用于必要时清理）
-    any_not_expired = False
-    matched_key = None
-    for k, v in candidates:
-        correct_code, ts, _p = v
-        is_expired = (now_ts - ts) > 300
-        if not is_expired:
-            any_not_expired = True
-            if code == correct_code:
-                matched_key = k
-                break
-
-    if matched_key is None:
-        # 若没有未过期匹配项：区分“全部过期”与“存在但不匹配”
-        if not any_not_expired:
-            # 清理已过期的验证码
-            try:
-                if primary_data and primary_key in verification_codes_cache:
-                    del verification_codes_cache[primary_key]
-            except Exception:
-                pass
-            try:
-                if fallback_data and fallback_key in verification_codes_cache:
-                    del verification_codes_cache[fallback_key]
-            except Exception:
-                pass
-            try:
-                if primary_data and primary_key in per_session_codes:
-                    del per_session_codes[primary_key]
-                    session['verification_codes'] = per_session_codes
-            except Exception:
-                pass
-            try:
-                if fallback_data and fallback_key in per_session_codes:
-                    del per_session_codes[fallback_key]
-                    session['verification_codes'] = per_session_codes
-            except Exception:
-                pass
-            return jsonify({'success': False, 'message': '验证码已过期'}), 400
-        else:
-            return jsonify({'success': False, 'message': '验证码错误'}), 400
-
-    # 使用并清理已匹配的验证码
-    try:
-        if matched_key in verification_codes_cache:
-            del verification_codes_cache[matched_key]
-    except Exception:
-        pass
-    try:
-        if matched_key in per_session_codes:
-            del per_session_codes[matched_key]
-            session['verification_codes'] = per_session_codes
-    except Exception:
-        pass
+    verified, message, status = _consume_verification_code(
+        email,
+        code,
+        ('register_or_set_password', 'register_login'),
+    )
+    if not verified:
+        return jsonify({'success': False, 'message': message}), status
 
     user = user_service.get_user_by_email(email)
 
@@ -428,7 +386,7 @@ def update_api_keys():
 @auth_bp.route('/reset_password', methods=['POST'])
 def reset_password():
     data = request.json
-    email = data.get('email', '').strip()
+    email = _normalize_email(data.get('email'))
     code = data.get('code', '').strip()
     new_password = data.get('new_password', '').strip()
 
@@ -438,40 +396,9 @@ def reset_password():
     if len(new_password) < 6:
         return jsonify({'success': False, 'message': '密码长度至少为6位'}), 400
 
-    cache_key = f"{email}_reset_password"
-    per_session_codes = session.get('verification_codes') or {}
-    cached_data = per_session_codes.get(cache_key) or verification_codes_cache.get(cache_key)
-    if not cached_data:
-        return jsonify({'success': False, 'message': '请先获取验证码'}), 400
-
-    correct_code, timestamp, _ = cached_data
-    if time.time() - timestamp > 300 or code != correct_code:
-        message = '验证码已过期' if time.time() - timestamp > 300 else '验证码错误'
-        if time.time() - timestamp > 300:
-            try:
-                if cache_key in verification_codes_cache:
-                    del verification_codes_cache[cache_key]
-            except Exception:
-                pass
-            try:
-                if cache_key in per_session_codes:
-                    del per_session_codes[cache_key]
-                    session['verification_codes'] = per_session_codes
-            except Exception:
-                pass
-        return jsonify({'success': False, 'message': message}), 400
-
-    try:
-        if cache_key in verification_codes_cache:
-            del verification_codes_cache[cache_key]
-    except Exception:
-        pass
-    try:
-        if cache_key in per_session_codes:
-            del per_session_codes[cache_key]
-            session['verification_codes'] = per_session_codes
-    except Exception:
-        pass
+    verified, message, status = _consume_verification_code(email, code, ('reset_password',))
+    if not verified:
+        return jsonify({'success': False, 'message': message}), status
 
     if user_service.set_password_for_user(email, new_password):
         return jsonify({'success': True, 'message': '密码重置成功，请使用新密码登录'})
@@ -575,4 +502,4 @@ def change_password():
             raise Exception("Failed to set password in user_service")
     except Exception as e:
         current_app.logger.error(f"Error in change_password: {e}")
-        return jsonify({'success': False, 'message': f'更新失败: {e}'}), 500
+        return jsonify({'success': False, 'message': '更新失败，请稍后重试'}), 500

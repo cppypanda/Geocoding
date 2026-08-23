@@ -26,6 +26,9 @@ class Config:
         db_url += "?sslmode=require"
     SQLALCHEMY_DATABASE_URI = db_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    MAX_CONTENT_LENGTH = int(os.environ.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024))
+    ERROR_CENTER_ENABLED = os.environ.get('ERROR_CENTER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
+    APP_RELEASE = os.environ.get('APP_RELEASE') or os.environ.get('RENDER_GIT_COMMIT')
 
     # This local folder is no longer used for uploads, but might be kept for other purposes.
     # We are switching to Cloudflare R2 for persistent storage.
@@ -37,6 +40,13 @@ class Config:
     BAIDU_KEY = os.environ.get('BAIDU_KEY')
     TIANDITU_KEY = os.environ.get('TIANDITU_KEY')
     ZHIPUAI_KEY = os.environ.get('ZHIPUAI_KEY')
+    ZHIPUAI_MODEL = os.environ.get('ZHIPUAI_MODEL', 'glm-4.7-flash')
+    DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
+    DEEPSEEK_API_BASE = os.environ.get('DEEPSEEK_API_BASE', 'https://api.deepseek.com')
+    DEEPSEEK_MODEL = os.environ.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
+    # URPA 同款自托管元搜索；生产环境应显式指向同机或内网 SearXNG 服务。
+    SEARXNG_URL = os.environ.get('SEARXNG_URL', 'http://127.0.0.1:8888')
+    SEARXNG_API_KEY = os.environ.get('SEARXNG_API_KEY')
     
     # Application constants
     REQUIRED_CONFIDENCE_THRESHOLD = 0.9
@@ -76,9 +86,18 @@ class Config:
     # ==============================================================================
     ALIPAY_APP_ID = os.environ.get('ALIPAY_APP_ID')
     # 应用私钥，请确保证书文件路径正确或直接从环境变量读取密钥字符串
-    APP_PRIVATE_KEY = os.environ.get('APP_PRIVATE_KEY')
+    ALIPAY_PRIVATE_KEY = os.environ.get('ALIPAY_PRIVATE_KEY') or os.environ.get('APP_PRIVATE_KEY')
+    APP_PRIVATE_KEY = ALIPAY_PRIVATE_KEY
     # 支付宝公钥，同上
     ALIPAY_PUBLIC_KEY = os.environ.get('ALIPAY_PUBLIC_KEY')
+    ALIPAY_NOTIFY_URL = os.environ.get('ALIPAY_NOTIFY_URL')
+    PAYMENT_PUBLIC_BASE_URL = os.environ.get('PAYMENT_PUBLIC_BASE_URL')
+
+    # YunGouOS 支付宝扫码支付（与 URPA 收款链路保持一致）
+    YUNGOUOS_MCH_ID = os.environ.get('YUNGOUOS_MCH_ID') or os.environ.get('YUNGOU_MCH_ID')
+    YUNGOUOS_PAY_KEY = os.environ.get('YUNGOUOS_PAY_KEY') or os.environ.get('YUNGOU_PAY_KEY')
+    YUNGOUOS_APP_ID = os.environ.get('YUNGOUOS_APP_ID') or os.environ.get('YUNGOU_APP_ID')
+    YUNGOUOS_NOTIFY_URL = os.environ.get('YUNGOUOS_NOTIFY_URL') or os.environ.get('YUNGOU_NOTIFY_URL')
     
     # ==============================================================================
     # 积分与奖励配置 (运营核心)
@@ -177,4 +196,4 @@ config_by_name = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'default': DevelopmentConfig
-} 
+}

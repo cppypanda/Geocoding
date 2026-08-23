@@ -1,7 +1,6 @@
 import json
 import asyncio
 import aiohttp
-import traceback
 import abc
 
 from flask import current_app
@@ -36,16 +35,28 @@ class BaseGeocoder(abc.ABC):
                     # Report success after a successful request
                     self.key_manager.report_success(current_key)
                     return await response.json(content_type=None)
-        except aiohttp.ClientError as e:
-            print(f"Aiohttp client error for {self.__class__.__name__}: {e}")
-            # Here you might want to parse the error to determine the reason
-            self.key_manager.report_failure(current_key, REASON_RATE_LIMITED) # Example reason
-            return {'error': f'API request failed: {e}'}
+        except aiohttp.ClientResponseError as e:
+            # Never log aiohttp's exception text here: it includes the full URL,
+            # and map API credentials are query-string parameters.
+            current_app.logger.warning(
+                "%s request failed with HTTP %s",
+                self.__class__.__name__,
+                e.status,
+            )
+            reason = REASON_INVALID if e.status in (401, 403) else REASON_RATE_LIMITED
+            self.key_manager.report_failure(current_key, reason)
+            return {'error': f'API request failed with HTTP {e.status}'}
+        except aiohttp.ClientError:
+            current_app.logger.warning("%s request failed", self.__class__.__name__)
+            self.key_manager.report_failure(current_key, REASON_OTHER)
+            return {'error': 'API request failed'}
         except Exception as e:
-            print(f"An unexpected error occurred in {self.__class__.__name__}: {e}")
-            traceback.print_exc()
-            self.key_manager.report_failure(current_key, REASON_OTHER) # Example reason
-            return {'error': f'An unexpected error occurred: {e}'}
+            current_app.logger.exception(
+                "Unexpected %s request failure",
+                self.__class__.__name__,
+            )
+            self.key_manager.report_failure(current_key, REASON_OTHER)
+            return {'error': 'Unexpected API request failure'}
 
     @abc.abstractmethod
     async def geocode(self, address: str, parsed_original_address: dict = None, **kwargs):
@@ -458,4 +469,4 @@ def get_geocoder(provider_name: str, user_id: int = None) -> BaseGeocoder:
 # --- Existing Code (to be refactored or removed) ---
 
 # All the geocode_* functions below this line are deprecated and have been
-# replaced by the Geocoder classes above. They are now removed. 
+# replaced by the Geocoder classes above. They are now removed.

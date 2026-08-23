@@ -1,0 +1,90 @@
+{% extends "admin/base.html" %}
+
+{% block title %}错误 #{{ error.id }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <a class="small text-decoration-none" href="{{ url_for('admin.error_center') }}">← 返回报错中心</a>
+        <h1 class="h3 mt-2 mb-1">{{ error.exception_type }}</h1>
+        <div class="text-muted">错误编号 ERR-{{ error.id }} · 指纹 <code>{{ error.fingerprint }}</code></div>
+    </div>
+    <div>
+        {% if error.status == 'open' %}<span class="badge bg-danger fs-6">未处理</span>
+        {% elif error.status == 'in_progress' %}<span class="badge bg-warning text-dark fs-6">处理中</span>
+        {% elif error.status == 'resolved' %}<span class="badge bg-success fs-6">已解决</span>
+        {% else %}<span class="badge bg-secondary fs-6">已忽略</span>{% endif %}
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">错误信息</div>
+            <div class="card-body">
+                <p class="text-break mb-0" style="white-space: pre-wrap;">{{ error.message }}</p>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">堆栈跟踪</div>
+            <div class="card-body bg-dark text-light p-0">
+                <pre class="p-3 mb-0" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 620px; overflow: auto;"><code>{{ error.traceback or '该错误日志没有携带堆栈信息。' }}</code></pre>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">请求上下文（已脱敏）</div>
+            <div class="card-body">
+                <h6>查询参数</h6>
+                <pre class="bg-light border rounded p-3 text-break">{{ error.query_params or '-' }}</pre>
+                <h6>请求内容</h6>
+                <pre class="bg-light border rounded p-3 text-break">{{ error.request_payload or '-' }}</pre>
+                <h6>请求头</h6>
+                <pre class="bg-light border rounded p-3 text-break mb-0">{{ error.request_headers or '-' }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card shadow-sm mb-4">
+            <div class="card-header fw-semibold">发生信息</div>
+            <dl class="card-body row mb-0 small">
+                <dt class="col-5">发生次数</dt><dd class="col-7">{{ error.occurrence_count }}</dd>
+                <dt class="col-5">首次发生</dt><dd class="col-7">{{ error.first_seen_at|to_beijing_time }}</dd>
+                <dt class="col-5">最近发生</dt><dd class="col-7">{{ error.last_seen_at|to_beijing_time }}</dd>
+                <dt class="col-5">来源</dt><dd class="col-7 text-break">{{ error.source or '-' }}</dd>
+                <dt class="col-5">请求接口</dt><dd class="col-7 text-break"><code>{{ error.request_method or '-' }} {{ error.request_path or '-' }}</code></dd>
+                <dt class="col-5">Endpoint</dt><dd class="col-7 text-break">{{ error.endpoint or '-' }}</dd>
+                <dt class="col-5">用户</dt><dd class="col-7 text-break">{{ error.user_email or ('ID ' ~ error.user_id if error.user_id else '-') }}</dd>
+                <dt class="col-5">客户端 IP</dt><dd class="col-7">{{ error.client_ip or '-' }}</dd>
+                <dt class="col-5">运行环境</dt><dd class="col-7">{{ error.environment or '-' }}</dd>
+                <dt class="col-5">版本</dt><dd class="col-7 text-break">{{ error.release or '-' }}</dd>
+                <dt class="col-5">User Agent</dt><dd class="col-7 text-break">{{ error.user_agent or '-' }}</dd>
+            </dl>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header fw-semibold">处理记录</div>
+            <form class="card-body" method="post" action="{{ url_for('admin.update_error_status', error_id=error.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label class="form-label" for="error-status">状态</label>
+                <select class="form-select mb-3" id="error-status" name="status">
+                    <option value="open" {{ 'selected' if error.status == 'open' else '' }}>未处理</option>
+                    <option value="in_progress" {{ 'selected' if error.status == 'in_progress' else '' }}>处理中</option>
+                    <option value="resolved" {{ 'selected' if error.status == 'resolved' else '' }}>已解决</option>
+                    <option value="ignored" {{ 'selected' if error.status == 'ignored' else '' }}>忽略</option>
+                </select>
+                <label class="form-label" for="resolution-notes">处理备注</label>
+                <textarea class="form-control mb-3" id="resolution-notes" name="resolution_notes" rows="5" placeholder="记录原因、修复提交或验证结果">{{ error.resolution_notes or '' }}</textarea>
+                <button class="btn btn-primary w-100" type="submit">保存处理结果</button>
+                {% if error.resolved_at %}
+                    <div class="small text-muted mt-3">
+                        {{ error.resolved_at|to_beijing_time }}，由 {{ error.resolved_by.email if error.resolved_by else '管理员' }} 处理
+                    </div>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,4 +1,4 @@
-import { getApiName, formatConfidence, formatCoordinatesHtml, getApiMarkerHtml, logToConsole, createAndAppendElement, buildTableRows, showLoading, hideLoading, showToast, addMarkersToMapAndFitBounds, getMarkerIcon, convertCoordinates, loadLocationTypeSuffixes, stripLocationTypeSuffix } from './utils.js';
+import { getApiName, formatConfidence, formatCoordinatesHtml, getApiMarkerHtml, logToConsole, createAndAppendElement, buildTableRows, showLoading, hideLoading, showToast, addMarkersToMapAndFitBounds, getMarkerIcon, convertCoordinates, loadLocationTypeSuffixes, stripLocationTypeSuffix, escapeHtml } from './utils.js';
 import { showLocationOnMap, clearSearchMarkers as clearMapMarkers } from './map.js';
 import { performSmartSearch, reverseGeocode, autoSelectPoint, performMapSearch } from './api.js';
 import { clearMapSearchResults } from './ui.js';
@@ -162,7 +162,7 @@ function updateApiResultCards() {
             if ((api === 'baidu' || api === 'tianditu') && (!res.formatted_address || res.formatted_address === state.currentResultData.address)) {
                  contentDiv.innerHTML = `
                     <p class="mb-1"><strong>地址:</strong> -</p>
-                    <p class="mb-1"><strong>类型:</strong> ${res.level || 'N/A'}</p>
+                    <p class="mb-1"><strong>类型:</strong> ${escapeHtml(res.level || 'N/A')}</p>
                     <p class="mb-1 text-muted small"><strong>WGS84:</strong> ${lng?.toFixed(6)}, ${lat?.toFixed(6)}</p>
                 `;
             } else if (res.formatted_address) {
@@ -174,7 +174,7 @@ function updateApiResultCards() {
             let displayAddress = res.formatted_address.startsWith(fullAdminArea) ? res.formatted_address : `${fullAdminArea} ${res.formatted_address}`;
 
             contentDiv.innerHTML = `
-                <p class="mb-1"><strong>地址：</strong>${displayAddress}</p>
+                <p class="mb-1"><strong>地址：</strong>${escapeHtml(displayAddress)}</p>
                     <p class="mb-1 text-muted small"><strong>WGS84:</strong> ${lng?.toFixed(6)}, ${lat?.toFixed(6)}</p>
             `;
             } else {
@@ -233,7 +233,7 @@ function updateCalibrationMapMarkers() {
                 })
             });
 
-            marker.bindPopup(`<h6>${getApiName(apiRes.api)}</h6><p>${apiRes.result.formatted_address || '未知'}</p>`);
+            marker.bindPopup(`<h6>${escapeHtml(getApiName(apiRes.api))}</h6><p>${escapeHtml(apiRes.result.formatted_address || '未知')}</p>`);
             marker.on('mouseover', function (e) { this.openPopup(); });
             marker.on('mouseout', function (e) { this.closePopup(); });
             marker.on('click', function() {
@@ -334,8 +334,11 @@ function displaySmartSearchResults(data) {
         const relationMatch = entry.match(/关系：([\s\S]+?)(?=\d+\.\s*地点：|\d+\.\s*关系：|行政区：|$)/); 
         if (locationMatch && relationMatch) {
             const locations = locationMatch[1].trim().split(/[，,、]/);
-            const relation = relationMatch[1].trim().replace(/\n/g, '<br>'); 
-            const locationTags = locations.map(loc => `<span class="location-tag" data-location="${loc.trim()}">${loc.trim()}</span>`).join('');
+            const relation = escapeHtml(relationMatch[1].trim()).replace(/\n/g, '<br>');
+            const locationTags = locations.map(loc => {
+                const safeLocation = escapeHtml(loc.trim());
+                return `<span class="location-tag" data-location="${safeLocation}">${safeLocation}</span>`;
+            }).join('');
             tbody.innerHTML += `<tr><td class="text-center">${index + 1}</td><td>${locationTags}</td><td>${relation}</td></tr>`;
         }
     });
@@ -425,7 +428,7 @@ function displayMapSearchResults() {
     // 根据结果更新标题
     if (titleElement && state.mapSearchResults[0] && state.mapSearchResults[0].source_display_name) {
         const sourceName = state.mapSearchResults[0].source_display_name;
-        titleElement.innerHTML = `地图搜索结果 <small class="text-muted"> - ${sourceName}</small>`;
+        titleElement.innerHTML = `地图搜索结果 <small class="text-muted"> - ${escapeHtml(sourceName)}</small>`;
     } else if (titleElement) {
         titleElement.innerHTML = '地图搜索结果';
     }
@@ -458,9 +461,9 @@ function displayMapSearchResults() {
         }
         row.innerHTML = `
             <td class="text-center">${index + 1}</td>
-            <td><strong>${poi.name}</strong></td>
-            <td><small>${poi.address}</small></td>
-            <td><small>${poi.pname || ''}${poi.cityname || ''}${poi.adname || ''}</small></td>
+            <td><strong>${escapeHtml(poi.name)}</strong></td>
+            <td><small>${escapeHtml(poi.address)}</small></td>
+            <td><small>${escapeHtml(`${poi.pname || ''}${poi.cityname || ''}${poi.adname || ''}`)}</small></td>
             <td class="text-center">${confidenceDisplay}</td>
             <td class="text-center">
                 <button class="${buttonClass}" data-action="select-poi" data-index="${index}">
@@ -483,7 +486,7 @@ function displayMapSearchResults() {
                     iconAnchor: [13, 13]
                 })
             }).addTo(state.itemCalibrationMap);
-            marker.bindPopup(`<h6>${poi.name}</h6><p>${poi.address}</p>`);
+            marker.bindPopup(`<h6>${escapeHtml(poi.name)}</h6><p>${escapeHtml(poi.address)}</p>`);
             state.mapSearchMarkers.push(marker);
             allPoiPoints.push([lat, lng]);
         }
@@ -707,7 +710,7 @@ async function onMapClickForManualMark(e) {
         if (state.manualSelectMarker) {
             state.manualSelectMarker.bindPopup(
                 `<strong>手动选点成功</strong><br/>
-                 <strong>地址:</strong> ${selection.result.formatted_address}<br/>
+                 <strong>地址:</strong> ${escapeHtml(selection.result.formatted_address)}<br/>
                  <strong>坐标:</strong> ${lng.toFixed(6)}, ${lat.toFixed(6)}`
             ).openPopup();
         }
@@ -1023,10 +1026,10 @@ export function createSelectedResultPopupHtml(selectedResult) {
     if (!selectedResult || !selectedResult.result) return '';
     const result = selectedResult.result;
     return `<div class="popup-content selected-result-popup">
-                <h6>${result.formatted_address || '已选定位置'}</h6>
-                <p><strong>来源：</strong> ${getApiName(selectedResult.api || '未知')}</p>
+                <h6>${escapeHtml(result.formatted_address || '已选定位置')}</h6>
+                <p><strong>来源：</strong> ${escapeHtml(getApiName(selectedResult.api || '未知'))}</p>
                 <p><strong>可信度：</strong> ${formatConfidence(selectedResult.confidence)}</p>
-                ${selectedResult.llm_reason ? `<p><strong>选点理由：</strong>${selectedResult.llm_reason}</p>` : ''}
+                ${selectedResult.llm_reason ? `<p><strong>选点理由：</strong>${escapeHtml(selectedResult.llm_reason)}</p>` : ''}
                 ${formatCoordinatesHtml(result)}
             </div>`;
 }

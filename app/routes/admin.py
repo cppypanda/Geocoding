@@ -1,6 +1,10 @@
+from datetime import datetime
+
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
 from flask_login import login_required, current_user
-from ..models import LocationType, User, GeocodingTask, AddressLog, Task
+from sqlalchemy import func, or_
+
+from ..models import LocationType, User, GeocodingTask, AddressLog, Task, ErrorRecord
 from .. import db
 from functools import wraps
 
@@ -139,3 +143,76 @@ def user_tasks():
 def user_task_details(task_id):
     task = Task.query.get_or_404(task_id)
     return render_template('admin/user_task_details.html', task=task)
+
+
+@admin_bp.route('/errors')
+@admin_required
+def error_center():
+    page = request.args.get('page', 1, type=int)
+    status_filter = request.args.get('status', 'open').strip()
+    severity_filter = request.args.get('severity', '').strip().lower()
+    keyword = request.args.get('q', '').strip()
+
+    query = ErrorRecord.query
+    if status_filter in {'open', 'in_progress', 'resolved', 'ignored'}:
+        query = query.filter(ErrorRecord.status == status_filter)
+    if severity_filter in {'error', 'critical'}:
+        query = query.filter(ErrorRecord.severity == severity_filter)
+    if keyword:
+        pattern = f'%{keyword}%'
+        query = query.filter(or_(
+            ErrorRecord.message.ilike(pattern),
+            ErrorRecord.exception_type.ilike(pattern),
+            ErrorRecord.request_path.ilike(pattern),
+            ErrorRecord.source.ilike(pattern),
+            ErrorRecord.fingerprint.ilike(pattern),
+        ))
+
+    pagination = query.order_by(ErrorRecord.last_seen_at.desc()).paginate(
+        page=page, per_page=30, error_out=False
+    )
+    status_counts = dict(
+        db.session.query(ErrorRecord.status, func.count(ErrorRecord.id))
+        .group_by(ErrorRecord.status)
+        .all()
+    )
+    total_occurrences = db.session.query(func.coalesce(func.sum(ErrorRecord.occurrence_count), 0)).scalar()
+
+    return render_template(
+        'admin/errors.html',
+        pagination=pagination,
+        status_filter=status_filter,
+        severity_filter=severity_filter,
+        keyword=keyword,
+        status_counts=status_counts,
+        total_occurrences=total_occurrences,
+    )
+
+
+@admin_bp.route('/errors/<int:error_id>')
+@admin_required
+def error_detail(error_id):
+    error_record = ErrorRecord.query.get_or_404(error_id)
+    return render_template('admin/error_detail.html', error=error_record)
+
+
+@admin_bp.route('/errors/<int:error_id>/status', methods=['POST'])
+@admin_required
+def update_error_status(error_id):
+    error_record = ErrorRecord.query.get_or_404(error_id)
+    status = request.form.get('status', '').strip()
+    if status not in {'open', 'in_progress', 'resolved', 'ignored'}:
+        flash('无效的错误处理状态。', 'danger')
+        return redirect(url_for('admin.error_detail', error_id=error_id))
+
+    error_record.status = status
+    error_record.resolution_notes = request.form.get('resolution_notes', '').strip()[:10000] or None
+    if status in {'resolved', 'ignored'}:
+        error_record.resolved_at = datetime.utcnow()
+        error_record.resolved_by_id = current_user.id
+    else:
+        error_record.resolved_at = None
+        error_record.resolved_by_id = None
+    db.session.commit()
+    flash('错误状态已更新。', 'success')
+    return redirect(url_for('admin.error_detail', error_id=error_id))

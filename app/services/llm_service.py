@@ -2,8 +2,14 @@ import json
 import re
 import asyncio
 import traceback
+import requests
+import random
 from datetime import datetime
-from flask import current_app
+from flask import current_app, has_request_context
+from flask_login import current_user
+
+from ..models import RechargeOrder
+from .web_search_local import search_web
 
 SMART_SEARCH_PROMPT = '''请分析以下搜索关键词，并以JSON格式返回相关的地理位置信息：
 {query}
@@ -31,39 +37,54 @@ SMART_SEARCH_PROMPT = '''请分析以下搜索关键词，并以JSON格式返回
 
 请确保返回的是合法的JSON格式。'''
 
-async def call_zhipu_web_enabled_llm(original_query_address: str, max_retries: int = 3):
-    """使用智谱AI的联网搜索功能来搜索地址相关信息"""
-    client = current_app.extensions.get('zhipuai_client')
-    if not client:
-        return {
-            "error": "ZhipuAI client not initialized. Please check ZHIPUAI_KEY.",
-            "llm_output": "智谱AI客户端未初始化",
-            "web_search_results_count": 0,
-            "web_search_references": [],
-            "request_timestamp": datetime.now().isoformat(),
-            "response_timestamp": datetime.now().isoformat()
-        }
+async def call_zhipu_web_enabled_llm(original_query_address: str, max_retries: int = 3, user_id: int = None):
+    """通过 SearXNG 搜索网页，再使用现有模型整理地址相关信息。
 
+    函数名为兼容既有调用保留；这里已不再调用智谱 search-pro。
+    """
+    request_timestamp = datetime.now().isoformat()
     try:
-        search_response = client.web_search.web_search(
-            search_engine="search-pro",
-            search_query=original_query_address
+        search_results = await asyncio.to_thread(
+            search_web, original_query_address, max_results=8
         )
-        
-        if not search_response or not search_response.search_result:
+        if not search_results:
             return {
                 "llm_output": "未能获取到有效的搜索结果",
                 "web_search_results_count": 0,
                 "web_search_references": [],
-                "request_timestamp": datetime.now().isoformat(),
+                "request_timestamp": request_timestamp,
                 "response_timestamp": datetime.now().isoformat(),
                 "error": "无搜索结果"
             }
 
-        search_context = "\n\n".join([
-            f"来源：{result.media if result.media else '未知来源'}\n{result.content}"
-            for result in search_response.search_result if result.content
-        ])
+        search_context_parts = []
+        web_search_references = []
+        for result in search_results:
+            url = (result.get('url') or '').strip()
+            if url and url not in web_search_references:
+                web_search_references.append(url)
+            content = (
+                result.get('raw_content')
+                or result.get('description')
+                or result.get('excerpt')
+                or ''
+            ).strip()
+            if not content:
+                continue
+            search_context_parts.append(
+                f"来源：{result.get('title') or url or '未知来源'}\n"
+                f"网址：{url}\n{content[:3000]}"
+            )
+        search_context = "\n\n".join(search_context_parts)
+        if not search_context:
+            return {
+                "llm_output": "搜索结果中没有可供分析的网页内容",
+                "web_search_results_count": len(search_results),
+                "web_search_references": web_search_references,
+                "request_timestamp": request_timestamp,
+                "response_timestamp": datetime.now().isoformat(),
+                "error": "搜索结果无有效内容",
+            }
 
         main_prompt = f'''
 原始地址为：{original_query_address}，在网络地图上无法找到原始地址的位置，现在在网页上收集地址的相关信息，提取可能在反映地址位置的其他地点。
@@ -83,135 +104,217 @@ N. 地点：地点名称（可以是单个或多个，多个地点用顿号、�
 
 说明：前面条目如此列先后的理由。
 '''
-        print(main_prompt)
-        llm_response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="glm-4-flash",
-            messages=[{"role": "user", "content": main_prompt}],
-            stream=False,
-            max_tokens=4090
-        )
+        llm_response = await call_llm_api(main_prompt, max_retries=max_retries, user_id=user_id, max_tokens=4090)
 
-        if not llm_response.choices or not llm_response.choices[0].message:
-            web_search_references = []
-            for r in search_response.search_result:
-                if hasattr(r, 'refer') and r.refer:
-                    web_search_references.append(r.refer)
-                    
+        if llm_response.get('error') or not llm_response.get('content'):
             return {
                 "llm_output": "大模型未能生成有效回复",
-                "web_search_results_count": len(search_response.search_result),
+                "web_search_results_count": len(search_results),
                 "web_search_references": web_search_references,
-                "request_timestamp": datetime.now().isoformat(),
+                "request_timestamp": request_timestamp,
                 "response_timestamp": datetime.now().isoformat(),
                 "error": "LLM响应无效"
             }
 
-        web_search_references = []
-        for r in search_response.search_result:
-            if hasattr(r, 'refer') and r.refer:
-                web_search_references.append(r.refer)
-        
         return {
-            "llm_output": llm_response.choices[0].message.content.strip(),
-            "web_search_results_count": len(search_response.search_result),
+            "llm_output": llm_response['content'].strip(),
+            "web_search_results_count": len(search_results),
             "web_search_references": web_search_references,
-            "request_timestamp": datetime.now().isoformat(),
+            "request_timestamp": request_timestamp,
             "response_timestamp": datetime.now().isoformat(),
             "error": None
         }
 
     except Exception as e:
-        print(f"联网搜索出错: {str(e)}")
-        traceback.print_exc()
+        current_app.logger.exception("SearXNG 联网搜索与整理失败")
         return {
-            "llm_output": f"联网搜索过程中发生错误: {str(e)}",
+            "llm_output": "联网搜索过程中发生错误",
             "web_search_results_count": 0,
             "web_search_references": [],
-            "request_timestamp": datetime.now().isoformat(),
+            "request_timestamp": request_timestamp,
             "response_timestamp": datetime.now().isoformat(),
-            "error": str(e)
+            "error": type(e).__name__
         }
 
-async def call_llm_api(prompt, max_retries=3):
-    """调用智谱AI的API，并返回包含时间戳和内容的字典"""
+def _resolve_user_id(user_id=None):
+    if user_id is not None:
+        return user_id
+    if has_request_context() and current_user.is_authenticated:
+        return current_user.id
+    return None
+
+
+def _is_recharge_member(user_id):
+    """成功充值过至少一笔的用户视为充值会员。"""
+    if not user_id:
+        return False
+    return RechargeOrder.query.filter_by(user_id=user_id, status='COMPLETED').first() is not None
+
+
+def _request_deepseek_completion(api_key, api_base, model, messages, max_tokens=None):
+    payload = {
+        'model': model,
+        'messages': messages,
+        'stream': False,
+        # DeepSeek Flash 默认会思考，这里按会员套餐要求显式关闭。
+        'thinking': {'type': 'disabled'},
+    }
+    if max_tokens:
+        payload['max_tokens'] = max_tokens
+    response = requests.post(
+        f"{api_base.rstrip('/')}/chat/completions",
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+        json=payload,
+        timeout=90,
+    )
+    response.raise_for_status()
+    data = response.json()
+    choices = data.get('choices') or []
+    if not choices or not (choices[0].get('message') or {}).get('content'):
+        raise ValueError('DeepSeek API 响应中没有有效内容')
+    return choices[0]['message']['content']
+
+
+def _is_non_retryable_model_error(exc):
+    """认证、权限及请求参数错误不会因立即重试而恢复。"""
+    status_code = getattr(exc, 'status_code', None)
+    response = getattr(exc, 'response', None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, 'status_code', None)
+    if status_code in (400, 401, 402, 403, 404):
+        return True
+    error_name = type(exc).__name__.lower()
+    return any(name in error_name for name in ('authentication', 'permission', 'badrequest'))
+
+
+async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
+                       _forced_provider=None, _fallback_attempted=False):
+    """按用户等级选择主模型，并在主模型最终失败时切换另一家模型一次。"""
+    resolved_user_id = _resolve_user_id(user_id)
+    deepseek_key = current_app.config.get('DEEPSEEK_API_KEY')
+    preferred_provider = (
+        'deepseek'
+        if _is_recharge_member(resolved_user_id) and bool(deepseek_key)
+        else 'zhipuai'
+    )
+    provider = _forced_provider or preferred_provider
+    use_deepseek = provider == 'deepseek'
+    model = (
+        current_app.config.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
+        if use_deepseek else current_app.config.get('ZHIPUAI_MODEL', 'glm-4.7-flash')
+    )
     client = current_app.extensions.get('zhipuai_client')
     llm_req_ts = None
     llm_res_ts = None
-    
+
     try:
-        if not client:
-            print("智谱AI客户端未初始化，请检查API密钥配置")
-            return {
-                'content': None,
-                'request_timestamp': None,
-                'response_timestamp': datetime.now().isoformat(),
-                'error': "智谱AI客户端未初始化"
-            }
-            
-        for attempt in range(max_retries):
+        messages = [
+            {'role': 'system', 'content': '你是一个地理位置分析专家，请基于用户的提示词判断地址匹配程度。'},
+            {'role': 'user', 'content': prompt},
+        ]
+
+        attempts = max(1, int(max_retries or 1))
+        last_error = None
+        provider_available = bool(deepseek_key) if use_deepseek else bool(client)
+        if not provider_available:
+            last_error = RuntimeError(f'{provider} 未配置或客户端未初始化')
+            current_app.logger.error("%s 模型配置不可用，将尝试灾备模型", provider)
+
+        for attempt in range(attempts if provider_available else 0):
             try:
                 llm_req_ts = datetime.now().isoformat()
-                response = await asyncio.to_thread(
-                    client.chat.completions.create,
-                    model="glm-4-flash",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "你是一个地理位置分析专家，请基于用户的提示词判断地址匹配程度。"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ]
-                )
+                if use_deepseek:
+                    content = await asyncio.to_thread(
+                        _request_deepseek_completion,
+                        deepseek_key,
+                        current_app.config.get('DEEPSEEK_API_BASE', 'https://api.deepseek.com'),
+                        model,
+                        messages,
+                        max_tokens,
+                    )
+                else:
+                    kwargs = {'model': model, 'messages': messages}
+                    if max_tokens:
+                        kwargs['max_tokens'] = max_tokens
+                    response = await asyncio.to_thread(client.chat.completions.create, **kwargs)
+                    if not response or not response.choices:
+                        raise ValueError('GLM API 响应中没有有效内容')
+                    content = response.choices[0].message.content
+                    if not content or not content.strip():
+                        raise ValueError('GLM API 响应正文为空')
                 llm_res_ts = datetime.now().isoformat()
-                
-                if not response or not response.choices:
-                    error_msg = f"API响应格式错误 (尝试 {attempt + 1}/{max_retries})"
-                    print(error_msg)
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(1)
-                        continue
-                    return {
-                        'content': None,
-                        'request_timestamp': llm_req_ts, 
-                        'response_timestamp': llm_res_ts, 
-                        'error': error_msg
-                    }
-                
                 return {
-                    'content': response.choices[0].message.content,
+                    'content': content,
                     'request_timestamp': llm_req_ts,
                     'response_timestamp': llm_res_ts,
-                    'error': None 
+                    'error': None,
+                    'provider': provider,
+                    'model': model,
+                    'fallback_from': None,
                 }
-                    
+
             except Exception as e:
-                llm_res_ts = datetime.now().isoformat() 
-                error_msg = f"API调用出错 (尝试 {attempt + 1}/{max_retries}): {str(e)}"
-                print(error_msg)
-                traceback.print_exc() 
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(1)
+                last_error = e
+                llm_res_ts = datetime.now().isoformat()
+                current_app.logger.warning(
+                    "%s 模型调用失败（第 %s/%s 次）：%s",
+                    provider, attempt + 1, attempts, type(e).__name__
+                )
+                if _is_non_retryable_model_error(e):
+                    current_app.logger.error(
+                        "%s 模型发生不可重试错误，将直接尝试灾备模型：%s",
+                        provider, type(e).__name__
+                    )
+                    break
+                if attempt < attempts - 1:
+                    delay = min(2 ** attempt, 4) + random.uniform(0, 0.25)
+                    await asyncio.sleep(delay)
                     continue
-                return {
-                    'content': None,
-                    'request_timestamp': llm_req_ts, 
-                    'response_timestamp': llm_res_ts,
-                    'error': error_msg
-                }
-                
-    except Exception as e:
-        final_error_msg = f"调用智谱AI API函数时发生严重内部错误: {str(e)}"
-        print(final_error_msg)
-        traceback.print_exc()
+                break
+
+        fallback_provider = 'zhipuai' if use_deepseek else 'deepseek'
+        fallback_available = bool(client) if fallback_provider == 'zhipuai' else bool(deepseek_key)
+        if not _fallback_attempted and fallback_available:
+            current_app.logger.warning(
+                "%s 主模型不可用，当前请求切换到 %s 灾备模型",
+                provider, fallback_provider
+            )
+            fallback_result = await call_llm_api(
+                prompt,
+                max_retries=1,
+                user_id=resolved_user_id,
+                max_tokens=max_tokens,
+                _forced_provider=fallback_provider,
+                _fallback_attempted=True,
+            )
+            fallback_result['fallback_from'] = provider
+            return fallback_result
+
+        error_type = type(last_error).__name__ if last_error else 'ProviderUnavailable'
+        current_app.logger.error(
+            "%s 模型及其灾备路径均调用失败：%s", provider, error_type
+        )
         return {
             'content': None,
-            'request_timestamp': llm_req_ts, 
-            'response_timestamp': datetime.now().isoformat(), 
-            'error': final_error_msg
+            'request_timestamp': llm_req_ts,
+            'response_timestamp': llm_res_ts or datetime.now().isoformat(),
+            'error': f"{provider} 模型调用失败",
+            'provider': provider,
+            'model': model,
+            'fallback_from': None,
+            'failure_type': error_type,
+        }
+
+    except Exception as e:
+        current_app.logger.exception("模型路由发生内部错误")
+        return {
+            'content': None,
+            'request_timestamp': llm_req_ts,
+            'response_timestamp': datetime.now().isoformat(),
+            'error': f"模型路由内部错误: {type(e).__name__}",
+            'provider': provider,
+            'model': model,
+            'fallback_from': None,
         }
 
 def get_llm_suggestions(search_results, original_address):
@@ -445,7 +548,7 @@ async def select_best_poi_from_search(original_address: str, poi_results: list, 
 """
 
     # 调用 LLM
-    llm_response = await call_llm_api(system_prompt + "\n\n" + user_prompt)
+    llm_response = await call_llm_api(system_prompt + "\n\n" + user_prompt, user_id=user_id)
     current_app.logger.info(f"LLM 原始响应: {llm_response.get('content')}") # 增加原始响应日志
     if llm_response.get('error') or not llm_response.get('content'):
         return {'error': f"LLM API调用失败: {llm_response.get('error', '无有效内容返回')}"}
@@ -492,7 +595,8 @@ async def select_best_poi_from_search(original_address: str, poi_results: list, 
         return {'error': '解析LLM响应失败，格式不正确。'}
 
 
-async def validate_poi_with_dossier(original_address: str, poi_candidates: list, dossier: dict, max_bg_items: int = 12) -> dict:
+async def validate_poi_with_dossier(original_address: str, poi_candidates: list, dossier: dict,
+                                    max_bg_items: int = 12, user_id: int = None) -> dict:
     """
     使用LLM结合第一步的情报摘录，判断POI候选是否与原始地址匹配，并返回结构化决策。
 
@@ -556,7 +660,7 @@ async def validate_poi_with_dossier(original_address: str, poi_candidates: list,
 - 若能判断出匹配项，请给出明确的 best_match_index 和简洁充分的 validation_reason。
 """
 
-        resp = await call_llm_api(prompt)
+        resp = await call_llm_api(prompt, user_id=user_id)
         if not resp or resp.get('error'):
             return {
                 'has_match': False,
@@ -610,7 +714,7 @@ async def validate_poi_with_dossier(original_address: str, poi_candidates: list,
             'mismatch_reasons': ['内部错误']
         }
 
-async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10) -> dict:
+async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10, user_id: int = None) -> dict:
     """
     批量语义预分析功能 - 根据SOP_Intelligent_Entity_Resolution.md Part A实现
     
@@ -649,7 +753,7 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10) ->
 
 请确保返回的是合法的JSON格式。"""
 
-        initial_response = await call_llm_api(initial_prompt)
+        initial_response = await call_llm_api(initial_prompt, user_id=user_id)
         
         if initial_response.get('error') or not initial_response.get('content'):
             current_app.logger.warning(f"语义预分析 Fast Path 失败: {initial_response.get('error', '无响应')} (使用默认主题)")
@@ -696,7 +800,9 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10) ->
             try:
                 current_app.logger.info(f"语义预分析 Slow Path: 开始联网搜索，search_query='{search_query}'")
                 # 使用现有的联网搜索功能
-                search_result = await call_zhipu_web_enabled_llm(search_query, max_retries=2)
+                search_result = await call_zhipu_web_enabled_llm(
+                    search_query, max_retries=2, user_id=user_id
+                )
                 
                 if search_result.get('error') or not search_result.get('llm_output'):
                     current_app.logger.warning(
@@ -728,7 +834,7 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10) ->
     "entity_type": "实体类型描述"
 }}"""
                 
-                final_response = await call_llm_api(final_prompt)
+                final_response = await call_llm_api(final_prompt, user_id=user_id)
                 
                 if final_response.get('error') or not final_response.get('content'):
                     current_app.logger.warning(
@@ -845,4 +951,4 @@ def _smart_sample_addresses(addresses: list, max_size: int) -> list:
             if addresses[i] not in sampled:  # 避免重复
                 sampled.append(addresses[i])
     
-    return sampled[:max_size] 
+    return sampled[:max_size]

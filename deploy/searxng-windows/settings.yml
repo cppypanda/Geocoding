@@ -1,0 +1,74 @@
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - baidu
+      - sogou
+
+server:
+  secret_key: "__SEARXNG_SECRET__"
+  port: 8888
+  bind_address: "127.0.0.1"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  default_lang: "zh-CN"
+  safe_search: 0
+  autocomplete: ""
+
+ui:
+  default_locale: "zh-Hans-CN"
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 8.0
+  pool_connections: 100
+  pool_maxsize: 10
+  useragent_suffix: ""
+
+disabled_engines:
+  - google
+  - google images
+  - google news
+  - google scholar
+  - google videos
+  - google translate
+  - duckduckgo
+  - duckduckgo images
+  - duckduckgo news
+  - duckduckgo videos
+  - wikipedia
+  - youtube
+  - github
+  - stackoverflow
+  - reddit
+  - twitter
+  - facebook
+  - instagram
+  - pinterest
+  - tumblr
+  - vimeo
+  - dailymotion
+  - bing images
+  - bing news
+  - bing videos
+  - bing academic
+
+engines:
+  - name: bing
+    engine: bing
+    shortcut: bng
+    disabled: false
+  - name: baidu
+    engine: baidu
+    shortcut: bdu
+    disabled: false
+  - name: sogou
+    engine: sogou
+    shortcut: sgo
+    disabled: false

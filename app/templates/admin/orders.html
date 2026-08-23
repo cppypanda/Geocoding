@@ -66,7 +66,9 @@
                             <td>¥{{ "%.2f"|format(order.amount) }}</td>
                             <td>{{ order.points }}</td>
                             <td>
-                                {% if order.payment_method == 'alipay' %}
+                                {% if order.payment_method == 'yungouos' %}
+                                    <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝扫码</span>
+                                {% elif order.payment_method == 'alipay' %}
                                     <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝</span>
                                 {% elif order.payment_method == 'wechat' %}
                                     <span class="badge bg-success-soft text-dark"><i class="bi bi-wechat me-1"></i> 微信支付</span>
@@ -133,7 +135,9 @@
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>积分:</span> <strong>{{ order.points }}</strong></li>
                     <li class="list-group-item px-0 d-flex justify-content-between"><span>支付方式:</span>
                         <strong>
-                        {% if order.payment_method == 'alipay' %}
+                        {% if order.payment_method == 'yungouos' %}
+                            <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝扫码</span>
+                        {% elif order.payment_method == 'alipay' %}
                             <span class="badge bg-primary-soft text-dark"><i class="bi bi-alipay me-1"></i> 支付宝</span>
                         {% elif order.payment_method == 'wechat' %}
                             <span class="badge bg-success-soft text-dark"><i class="bi bi-wechat me-1"></i> 微信支付</span>
@@ -202,7 +206,7 @@
         <p>在当前筛选条件下，没有找到任何订单。</p>
     </div>
 {% endif %}
-{% endblock %} 
+{% endblock %}
 
 {% block scripts %}
 {{ super() }}
@@ -351,4 +355,4 @@ document.addEventListener('DOMContentLoaded', function () {
     updateBatchActionButton();
 });
 </script>
-{% endblock %} 
+{% endblock %}

@@ -7,6 +7,7 @@ from .. import db # Import db instance
 # from ..utils.auth import login_required # This is replaced by flask_login's decorator
 from ..routes.geocoding import get_points_cost, deduct_points
 import json
+import re
 import jionlp as jio
 import asyncio
 import traceback
@@ -23,6 +24,20 @@ from ..services import user_service
 
 main_bp = Blueprint('main', __name__)
 
+
+def _safe_export_name(value):
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '_', str(value or 'geocoding_results'))
+    name = name.replace('..', '_').strip(' ._')[:80]
+    return name or 'geocoding_results'
+
+
+def _finish_export(response, user_id, points_to_deduct):
+    if points_to_deduct > 0 and not deduct_points(user_id, points_to_deduct):
+        return jsonify({'error': f'积分不足，导出需要 {points_to_deduct} 积分'}), 402
+    updated_user = user_service.get_user_by_id(user_id)
+    response.headers['X-Updated-User-Points'] = str(updated_user.points if updated_user else 0)
+    return response
+
 @main_bp.route('/clear_flash_messages', methods=['POST'])
 def clear_flash_messages():
     """Endpoint to clear flashed messages from the session."""
@@ -32,39 +47,10 @@ def clear_flash_messages():
     return jsonify({'success': True, 'message': 'Flashed messages cleared.'})
 
 
-@main_bp.route('/admin/run-migration')
-def run_migration():
-    """
-    Temporary route to run a database migration.
-    """
-    try:
-        with db.engine.connect() as connection:
-            inspector = db.inspect(db.engine)
-            columns = [col['name'] for col in inspector.get_columns('feedback')]
-            
-            messages = []
-
-            if 'replies_json' not in columns:
-                sql = "ALTER TABLE feedback ADD COLUMN replies_json TEXT"
-                connection.execute(db.text(sql))
-                messages.append("Added 'replies_json' column.")
-            
-            connection.commit()
-
-            if not messages:
-                return "Migration already complete. No changes made."
-            
-            return "<br>".join(messages)
-
-    except Exception as e:
-        return f"An error occurred: {e}"
-
-
 @main_bp.route('/')
 def index():
-    """主页，直接渲染index.html，并传入充值套餐数据"""
-    packages = current_app.config.get('RECHARGE_PACKAGES', {})
-    return render_template('index.html', packages=packages)
+    """主页，直接渲染index.html"""
+    return render_template('index.html')
 
 @main_bp.route('/get_location_types', methods=['GET'])
 def get_location_types():
@@ -79,6 +65,7 @@ def get_location_types():
         return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 @main_bp.route('/record_used_suffixes', methods=['POST'])
+@login_required
 def record_used_suffixes():
     """记录一次地理编码中使用过的后缀列表。这是一个即发即忘的接口。"""
     try:
@@ -86,6 +73,10 @@ def record_used_suffixes():
         suffixes = data.get('suffixes', [])
         
         if suffixes and isinstance(suffixes, list):
+            suffixes = [
+                item.strip() for item in suffixes[:50]
+                if isinstance(item, str) and 0 < len(item.strip()) <= 50
+            ]
             current_time = datetime.utcnow()
             for suffix_name in suffixes:
                 # Find if the suffix already exists
@@ -132,6 +123,8 @@ def jionlp_autocomplete():
         
         if not addresses or not isinstance(addresses, list):
             return jsonify({'success': False, 'message': '地址列表不能为空'}), 400
+        if len(addresses) > 200 or any(not isinstance(item, str) or len(item) > 500 for item in addresses):
+            return jsonify({'success': False, 'message': '地址数量或长度超过限制'}), 400
         
         # 使用列表推导式和新的工具函数来处理地址列表
         completed_addresses = [address_processing.complete_address_jionlp(addr) for addr in addresses]
@@ -150,13 +143,17 @@ def jionlp_autocomplete():
 def export_data():
     """导出数据为不同格式"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         export_format = data.get('format')
         results = data.get('data', [])
-        location_name = data.get('location_name', 'geocoding_results')
+        location_name = _safe_export_name(data.get('location_name', 'geocoding_results'))
 
-        if not results:
+        if not isinstance(results, list) or not results:
             return jsonify({'error': '没有可导出的数据'}), 400
+        if len(results) > 10000:
+            return jsonify({'error': '单次最多导出 10000 条数据'}), 413
+        if export_format not in {'xlsx', 'kml', 'shp'}:
+            return jsonify({'error': '不支持的导出格式'}), 400
 
         # --- 积分扣除逻辑 ---
         user_id = current_user.id
@@ -165,20 +162,21 @@ def export_data():
         # 导出功能不区分用户Key优惠，统一标准价
         points_to_deduct = get_points_cost(task_name, used_user_key=False)
 
-        if points_to_deduct > 0:
-            if current_user.points < points_to_deduct:
-                return jsonify({
-                    'error': f'积分不足，导出需要 {points_to_deduct} 积分，您当前拥有 {current_user.points} 积分。'
-                }), 402 # HTTP 402 Payment Required
-            
-            deduct_points(user_id, points_to_deduct)
-            current_app.logger.info(f"计费：用户 {user_id} 导出 {export_format.upper()} 文件扣除 {points_to_deduct} 积分。")
+        if points_to_deduct > 0 and (current_user.points or 0) < points_to_deduct:
+            return jsonify({
+                'error': f'积分不足，导出需要 {points_to_deduct} 积分，您当前拥有 {current_user.points or 0} 积分。'
+            }), 402
 
         df = pd.DataFrame(results)
 
-        # 获取最新的用户积分
-        updated_user = user_service.get_user_by_id(user_id)
-        updated_points = updated_user.points if updated_user else current_user.points
+        if export_format in {'kml', 'shp'}:
+            if 'lng' not in df.columns or 'lat' not in df.columns:
+                return jsonify({'error': '数据缺少经纬度信息，无法导出'}), 400
+            try:
+                pd.to_numeric(df['lng'], errors='raise')
+                pd.to_numeric(df['lat'], errors='raise')
+            except Exception:
+                return jsonify({'error': '经纬度数据格式无效'}), 400
 
         if export_format == 'xlsx':
             # 导出为 Excel
@@ -192,14 +190,10 @@ def export_data():
                 as_attachment=True,
                 download_name=f'{location_name}.xlsx'
             )
-            response.headers['X-Updated-User-Points'] = str(updated_points)
-            return response
+            return _finish_export(response, user_id, points_to_deduct)
 
         if export_format == 'kml':
             # 导出为 KML（需提供 WGS84 坐标 lng/lat）
-            if 'lng' not in df.columns or 'lat' not in df.columns:
-                return jsonify({'error': '数据缺少经纬度信息，无法导出为KML'}), 400
-
             kml = simplekml.Kml()
             for _, row in df.iterrows():
                 try:
@@ -250,13 +244,9 @@ def export_data():
                 as_attachment=True,
                 download_name=f'{location_name}.kml'
             )
-            response.headers['X-Updated-User-Points'] = str(updated_points)
-            return response
+            return _finish_export(response, user_id, points_to_deduct)
 
         if export_format == 'shp':
-            if 'lng' not in df.columns or 'lat' not in df.columns:
-                return jsonify({'error': '数据缺少经纬度信息，无法导出为SHP'}), 400
-
             # 确保列名是10个字符以内，这是Shapefile的限制
             df.columns = [col[:10] for col in df.columns]
 
@@ -285,14 +275,9 @@ def export_data():
                     as_attachment=True,
                     download_name=f'{location_name}.zip'
                 )
-                response.headers['X-Updated-User-Points'] = str(updated_points)
-                return response
-
-        # 其他不支持的格式
-        else:
-            return jsonify({'error': '不支持的导出格式'}), 400
+                return _finish_export(response, user_id, points_to_deduct)
 
     except Exception as e:
         print(f"导出数据时出错: {e}")
         traceback.print_exc()
-        return jsonify({'error': f'服务器内部错误: {e}'}), 500 
+        return jsonify({'error': '服务器内部错误'}), 500

@@ -1,4 +1,4 @@
-import { createAndAppendElement, showToast } from './utils.js';
+import { createAndAppendElement, showToast, escapeHtml } from './utils.js';
 import { saveLocationTypeToServer } from './api.js';
 import { showLoading, hideLoading } from './utils.js';
 import { performSmartSearch } from './api.js';
@@ -33,7 +33,7 @@ function updateLocationTypeTagsDisplay() {
     locationTypeTags.forEach(tag => {
         createAndAppendElement('div', {
             className: 'location-type-tag',
-            innerHTML: `${tag}<span class="remove-tag" data-tag="${tag}">&times;</span>`,
+            innerHTML: `${escapeHtml(tag)}<span class="remove-tag" data-tag="${escapeHtml(tag)}">&times;</span>`,
             parent: tagsContainer
         });
     });
@@ -112,14 +112,14 @@ function displaySmartSearchResults(results) {
             <tr>
                 <td>${index + 1}</td>
                 <td>
-                    <div class="location-name">${item.name || '未知名称'}</div>
+                    <div class="location-name">${escapeHtml(item.name || '未知名称')}</div>
                     <div class="location-tags">
-                        <span class="location-tag">${item.type || '未知类型'}</span>
-                        <span class="location-tag">${item.source || '未知来源'}</span>
+                        <span class="location-tag">${escapeHtml(item.type || '未知类型')}</span>
+                        <span class="location-tag">${escapeHtml(item.source || '未知来源')}</span>
                     </div>
                 </td>
                 <td>
-                    <div class="relation-info">${item.address || '无地址信息'}</div>
+                    <div class="relation-info">${escapeHtml(item.address || '无地址信息')}</div>
                 </td>
             </tr>`;
         tableBody.insertAdjacentHTML('beforeend', row);

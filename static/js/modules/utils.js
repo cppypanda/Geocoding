@@ -1,4 +1,14 @@
 // 统一归一API标识，去掉如 "_re-geocoded"、"_reverse" 等后缀
+export function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;'
+    }[character]));
+}
+
 export function normalizeApiKey(api) {
     if (!api) return 'unknown';
     const str = String(api).toLowerCase();
@@ -198,7 +208,7 @@ export function showLoading(message = '加载中...') {
             id: 'loadingSpinner',
             className: 'position-fixed top-50 start-50 translate-middle',
             styles: { zIndex: '9999' },
-            innerHTML: `<div class="spinner-border text-primary" role="status"><span class="visually-hidden">${message}</span></div><div class="mt-2 text-primary">${message}</div>`,
+            innerHTML: `<div class="spinner-border text-primary" role="status"><span class="visually-hidden">${escapeHtml(message)}</span></div><div class="mt-2 text-primary">${escapeHtml(message)}</div>`,
             parent: document.body
         });
     } else {
@@ -246,7 +256,7 @@ export function showToast(message, type = 'info') {
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Close"></button>
           </div>
           <div class="toast-body">
-            ${message}
+            ${escapeHtml(message)}
           </div>
         </div>`;
     

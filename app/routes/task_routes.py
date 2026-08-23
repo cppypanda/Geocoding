@@ -16,7 +16,7 @@ def get_tasks():
         - per_page (int): 每页数量，默认为10。
     """
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 10, type=int)
+    per_page = min(max(request.args.get('per_page', 10, type=int), 1), 100)
     
     user_id = current_user.id
     tasks = task_service.get_tasks_by_user(user_id, page, per_page)
@@ -53,7 +53,7 @@ def create_task():
         return jsonify({"error": str(e)}), 409 # 409 Conflict
     except Exception as e:
         # 捕获未预期错误，避免 500 泄露
-        return jsonify({"error": f"保存失败: {str(e)}"}), 500
+        return jsonify({"error": "任务保存失败"}), 500
 
 @task_bp.route('/<int:task_id>', methods=['GET'])
 @login_required
@@ -107,4 +107,4 @@ def delete_task(task_id):
     if rows_affected > 0:
         return jsonify({"message": "任务删除成功"})
     else:
-        return jsonify({"error": "找不到要删除的任务或无访问权限"}), 404 
+        return jsonify({"error": "找不到要删除的任务或无访问权限"}), 404

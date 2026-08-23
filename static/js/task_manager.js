@@ -1,4 +1,5 @@
 import { fetchAPI } from './modules/api.js';
+import { escapeHtml } from './modules/utils.js';
 
 // console.log("task_manager.js script loaded.");
 
@@ -488,8 +489,8 @@ export function initializeTaskManager() {
                 tasksHtml += `
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <div>
-                            <strong class="d-block">${task.task_name}</strong>
-                            <small class="text-muted">更新于: ${task.updated_at}</small>
+                            <strong class="d-block">${escapeHtml(task.task_name)}</strong>
+                            <small class="text-muted">更新于: ${escapeHtml(task.updated_at)}</small>
                         </div>
                         <div>
                             <button class="btn btn-primary btn-sm me-2 btn-load-task" data-task-id="${task.id}">加载</button>

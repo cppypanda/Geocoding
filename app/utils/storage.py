@@ -33,7 +33,7 @@ def get_s3_client():
         current_app.logger.error(f"An unexpected error occurred while initializing S3 client: {e}")
         return None
 
-def upload_file_to_r2(file_storage, folder='feedback'):
+def upload_file_to_r2(file_storage, folder='feedback', content_type='application/octet-stream'):
     """
     Uploads a file to the configured Cloudflare R2 bucket.
 
@@ -59,7 +59,7 @@ def upload_file_to_r2(file_storage, folder='feedback'):
             file_storage,
             bucket_name,
             object_name,
-            ExtraArgs={'ContentType': file_storage.content_type}
+            ExtraArgs={'ContentType': content_type}
         )
         
         # --- URL拼接健壮性修复 ---

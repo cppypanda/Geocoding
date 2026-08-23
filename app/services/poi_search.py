@@ -2,7 +2,6 @@ import json
 import re
 import asyncio
 import aiohttp
-import traceback
 import requests # For synchronous HTTP requests in Baidu/Tianditu POI searches
 from abc import ABC, abstractmethod
 from flask import current_app
@@ -26,7 +25,8 @@ class BaseSearcher(ABC):
     def _get_key(self):
         """Gets the next available API key."""
         if self.key_manager:
-            return self.key_manager.get_next_key(self.user_id)
+            key, _key_type = self.key_manager.get_next_key(self.user_id)
+            return key
         raise ValueError("APIKeyManager not initialized for this searcher.")
 
 # --- Amap Searcher ---
@@ -40,8 +40,11 @@ class AmapSearcher(BaseSearcher):
 
     async def search(self, keyword: str, city_limit: str = '', retry_count: int = 3):
         url = 'https://restapi.amap.com/v3/place/text'
+        api_key = self._get_key()
+        if not api_key:
+            return {'error': 'No available Amap API key.'}
         params = {
-            'key': self._get_key(),
+            'key': api_key,
             'keywords': keyword,
             'offset': 20,
             'page': 1,
@@ -50,18 +53,15 @@ class AmapSearcher(BaseSearcher):
         if city_limit:
             params['city'] = city_limit
 
-        print(f"\n开始异步调用高德地图POI搜索API，关键词: {keyword}, 城市限制: {city_limit}")
-        print(f"请求URL: {url}")
-        print(f"请求参数: {params}")
+        current_app.logger.debug("调用高德 POI 搜索，关键词长度=%s", len(keyword))
 
         for attempt in range(retry_count):
-            print(f"  当前是第 {attempt + 1} 次尝试")
             try:
                 # amap_limiter.acquire() will be called from geocoding.py if needed, not directly here to avoid circular dependency for now
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url, params=params, timeout=10) as response:
                         if response.status != 200:
-                            print(f"    高德POI API HTTP错误: {response.status} - {await response.text()}")
+                            current_app.logger.warning("高德 POI 请求返回 HTTP %s", response.status)
                             if attempt == retry_count - 1:
                                 return {'error': f"Amap API HTTP Error: {response.status}"}
                             await asyncio.sleep(1)
@@ -69,14 +69,6 @@ class AmapSearcher(BaseSearcher):
                         
                         data = await response.json()
                         
-                        # 添加响应内容日志
-                        print(f"高德API响应状态: {response.status}")
-                        response_text = str(data)
-                        if len(response_text) > 500:
-                            print(f"高德API响应内容: {response_text[:500]}...")
-                        else:
-                            print(f"高德API响应内容: {response_text}")
-
                         if data.get('status') == '1':
                             # 成功响应，检查是否有POI结果
                             pois_list = data.get('pois', [])
@@ -85,34 +77,33 @@ class AmapSearcher(BaseSearcher):
                                 return {'pois': pois}
                             else:
                                 # 成功但无结果，这是正常情况，不是错误
-                                print(f"    高德POI API成功响应但无POI结果 (尝试 {attempt + 1})")
+                                current_app.logger.debug("高德 POI 请求成功但没有候选")
                                 return {'pois': []}
                         else:
                             error_msg = data.get('info', '未知错误')
-                            print(f"    高德POI API返回错误 (尝试 {attempt + 1}): {error_msg} (状态码: {data.get('infocode')})")
+                            infocode = str(data.get('infocode') or '')
+                            current_app.logger.warning("高德 POI API 返回错误码 %s", infocode)
                             if attempt == retry_count - 1:
                                 return {'error': error_msg}
-                            if data.get('infocode') in ['10001', '10002', '10003']:
-                                print("    密钥相关错误，不再重试。")
+                            if infocode in {'10001', '10002', '10003', '10013'}:
+                                self.key_manager.report_failure(api_key, 'invalid')
                                 return {'error': error_msg}
-            except aiohttp.ClientError as e:
-                print(f"  高德POI API请求客户端错误 (尝试 {attempt + 1}): {str(e)}")
+            except aiohttp.ClientError:
+                current_app.logger.warning("高德 POI 请求失败（第 %s 次）", attempt + 1)
                 if attempt == retry_count - 1:
-                    return {'error': f"An exception occurred: {e}"}
+                    return {'error': "Amap API request failed"}
             except asyncio.TimeoutError:
-                print(f"  高德POI API请求超时 (尝试 {attempt + 1})")
                 if attempt == retry_count - 1:
                     return {'error': f"Amap API request timeout (attempt {attempt + 1})"}
-            except Exception as e:
-                print(f"  高德POI API未知异常 (尝试 {attempt + 1}): {str(e)}")
-                traceback.print_exc()
+            except Exception:
+                current_app.logger.exception("高德 POI 请求发生未知异常")
                 if attempt == retry_count - 1:
-                    return {'error': f"An exception occurred: {e}"}
+                    return {'error': "Amap API request failed"}
             
             if attempt < retry_count - 1:
                 await asyncio.sleep(1)
             
-        return {'error': f"An exception occurred: {e}"}
+        return {'error': "Amap API request failed"}
 
     def _process_amap_results(self, pois_data, original_keyword: str):
         results = []
@@ -174,8 +165,9 @@ class BaiduSearcher(BaseSearcher):
             flask_app = current_app._get_current_object()
             pois = await loop.run_in_executor(None, lambda: self._sync_search_with_context(flask_app, keyword))
             return {'pois': pois}
-        except Exception as e:
-            return {'error': f"An exception occurred in Baidu search: {e}"}
+        except Exception:
+            current_app.logger.warning("百度 POI 搜索请求失败")
+            return {'error': "Baidu POI search request failed"}
 
     def _sync_search_with_context(self, app, keyword):
         with app.app_context():
@@ -187,25 +179,16 @@ class BaiduSearcher(BaseSearcher):
         region = city if city else province or "全国"
         
         url = "https://api.map.baidu.com/place/v2/search"
+        api_key, _key_type = self.key_manager.get_next_key(self.user_id)
         params = {
-            "ak": self.baidu_key, "query": keyword, "region": region,
+            "ak": api_key, "query": keyword, "region": region,
             "output": "json", "scope": 2, "page_size": 20, "ret_coordtype": "bd09ll"
         }
         
-        print(f"百度POI搜索请求: {url}")
-        print(f"百度请求参数: {params}")
+        current_app.logger.debug("调用百度 POI 搜索，关键词长度=%s", len(keyword))
         
         response = requests.get(url, params=params, timeout=10)
-        print(f"百度API响应状态: {response.status_code}")
-        if response.status_code != 200:
-            print(f"百度API错误响应: {response.text}")
-        else:
-            response_text = response.text
-            if len(response_text) > 500:
-                print(f"百度API响应内容: {response_text[:500]}...")
-            else:
-                print(f"百度API响应内容: {response_text}")
-        
+        current_app.logger.debug("百度 POI 请求返回 HTTP %s", response.status_code)
         response.raise_for_status()
         data = response.json()
         
@@ -264,8 +247,10 @@ class TiandituSearcher(BaseSearcher):
             flask_app = current_app._get_current_object()
             pois = await loop.run_in_executor(None, lambda: self._sync_search_with_context(flask_app, keyword))
             return {'pois': pois}
-        except Exception as e:
-            return {'error': f"An exception occurred in Tianditu search: {e}"}
+        except Exception:
+            # requests exceptions include the full URL, which contains the API key.
+            current_app.logger.warning("天地图 POI 搜索请求失败")
+            return {'error': "Tianditu POI search request failed"}
 
     def _sync_search_with_context(self, app, keyword):
         with app.app_context():
@@ -319,24 +304,16 @@ class TiandituSearcher(BaseSearcher):
             post_data["mapBound"] = "73,3,136,54" # 中国大致范围 (minX,minY,maxX,maxY)
 
         # 不使用ensure_ascii=False，保持默认行为；添加 show=2 以返回更详细行政区字段
-        params = {"postStr": json.dumps(post_data), "type": "query", "tk": self.tianditu_key, "show": "2"}
+        api_key, _key_type = self.key_manager.get_next_key(self.user_id)
+        params = {"postStr": json.dumps(post_data), "type": "query", "tk": api_key, "show": "2"}
 
-        print(f"天地图POI搜索请求: {url}")
-        print(f"天地图请求参数: {params}")
+        current_app.logger.debug("调用天地图 POI 搜索，关键词长度=%s", len(keyword))
         
-        # Add User-Agent header to avoid 418 Client Error
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = requests.get(url, params=params, timeout=10)
         
-        print(f"天地图API响应状态: {response.status_code}")
         if response.status_code != 200:
-            print(f"天地图API错误响应: {response.text}")
+            current_app.logger.warning("天地图 POI 请求返回 HTTP %s", response.status_code)
             response.raise_for_status()
-        else:
-            print(f"天地图API响应内容: {response.text[:500]}...")
 
         data = response.json()
         
@@ -344,20 +321,12 @@ class TiandituSearcher(BaseSearcher):
         result_type = data.get("resultType")
         count = data.get("count", 0)
         
-        # 增加新日志：打印从天地图API返回的未经处理的原始JSON数据
-        print(f"[RAW_TIANDITU_RESPONSE] {json.dumps(data, ensure_ascii=False)}")
-        
-        print(f"天地图响应解析: resultType={result_type}, count={count}")
+        current_app.logger.debug("天地图 POI 响应类型=%s, 数量=%s", result_type, count)
         
         if result_type == 1:
             # resultType=1: 普通POI，解析pois数组
             pois_data = data.get("pois", [])
             if pois_data:
-                try:
-                    sample = pois_data[:3]
-                    print(f"✅ 天地图找到{len(pois_data)}个POI，样本(前3)：{json.dumps(sample, ensure_ascii=False)}")
-                except Exception:
-                    print(f"✅ 天地图找到{len(pois_data)}个POI（样本打印失败）")
                 return self._process_tianditu_results(pois_data, keyword, province, city)
             else:
                 print("天地图resultType=1但pois为空")
@@ -470,4 +439,4 @@ def get_searcher(source: str, user_id=None) -> BaseSearcher:
     searcher_class = _searcher_classes.get(source.lower())
     if searcher_class:
         return searcher_class(user_id)
-    return None 
+    return None

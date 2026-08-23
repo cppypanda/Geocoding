@@ -68,7 +68,16 @@ function renderNotificationsList(notifications) {
     notifications.forEach((n) => {
         const li = document.createElement('li');
         const item = document.createElement('a');
-        item.href = n.link || '#';
+        let safeLink = '#';
+        if (n.link) {
+            try {
+                const parsedLink = new URL(n.link, window.location.origin);
+                if (parsedLink.origin === window.location.origin && ['http:', 'https:'].includes(parsedLink.protocol)) {
+                    safeLink = parsedLink.href;
+                }
+            } catch (e) {}
+        }
+        item.href = safeLink;
         item.className = 'dropdown-item d-flex align-items-start gap-2';
         item.style.whiteSpace = 'normal';
 
@@ -94,7 +103,7 @@ function renderNotificationsList(notifications) {
         item.appendChild(dot);
         item.appendChild(contentWrap);
 
-        if (n.link) {
+        if (safeLink !== '#') {
             item.addEventListener('click', (e) => {
                 // Let default navigation happen; close dropdown
                 try {

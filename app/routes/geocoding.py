@@ -5,12 +5,13 @@ import time
 import os
 from datetime import datetime
 import jionlp as jio
+from sqlalchemy import func, update
 
 from flask import Blueprint, request, jsonify, session, current_app, send_file
 from flask_login import login_required, current_user
 
 from ..services import geocoding_apis, poi_search, llm_service
-from ..services.web_search_local import search_sogou
+from ..services.web_search_local import search_web
 from ..utils import geo_transforms, decorators, api_managers, address_processing
 from ..utils.log_context import request_context_var
 from ..models import LocationType, User, ApiRequestLog, db, GeocodingTask, AddressLog
@@ -32,32 +33,53 @@ def load_session_results(session_id, original_address):
     return geocoding_session_data.get(session_id, {}).get(original_address)
 
 def deduct_points(user_id, points_to_deduct):
-    """为指定用户扣除积分（使用SQLAlchemy）。"""
+    """Atomically deduct points and return whether the balance was sufficient."""
     if not user_id or points_to_deduct <= 0:
-        return
+        return True
 
     try:
-        user = User.query.get(user_id)
-        if user:
-            # 确保积分不会成为负数
-            if user.points is None:
-                user.points = 0
-            
-            if user.points >= points_to_deduct:
-                user.points -= points_to_deduct
-            else:
-                current_app.logger.warning(f"用户 {user_id} 积分不足 (剩余 {user.points}, 需要 {points_to_deduct})，操作未执行。")
-                # 可选：如果积分为0，则不扣除
-                user.points = 0
-            
-            db.session.commit()
-            current_app.logger.info(f"成功为用户 {user_id} 扣除 {points_to_deduct} 积分。剩余积分: {user.points}")
-        else:
-            current_app.logger.error(f"尝试扣分失败：未找到ID为 {user_id} 的用户。")
-
+        result = db.session.execute(
+            update(User)
+            .where(
+                User.id == user_id,
+                func.coalesce(User.points, 0) >= points_to_deduct,
+            )
+            .values(points=func.coalesce(User.points, 0) - points_to_deduct)
+        )
+        if result.rowcount != 1:
+            db.session.rollback()
+            return False
+        db.session.commit()
+        return True
     except Exception as e:
         db.session.rollback()
         current_app.logger.error(f"为用户 {user_id} 扣除积分时发生数据库异常: {e}", exc_info=True)
+        return False
+
+
+def refund_points(user_id, points):
+    if not user_id or points <= 0:
+        return
+    try:
+        db.session.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(points=func.coalesce(User.points, 0) + points)
+        )
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.error('退还用户 %s 积分失败: %s', user_id, exc, exc_info=True)
+
+
+def _charge_points_or_402(task_name, user_id):
+    points = get_points_cost(task_name, used_user_key=False)
+    if points > 0 and not deduct_points(user_id, points):
+        return points, jsonify({
+            'success': False,
+            'message': f'积分不足，本次操作需要 {points} 积分',
+        }), 402
+    return points, None, None
 
 
 def get_points_cost(task_name, used_user_key, token_count=0):
@@ -175,7 +197,7 @@ async def _perform_reverse_geocoding(winner_result, user_id, parsed_original_add
             current_app.logger.error(f"'{provider}' 的逆地理编码返回错误: {reversed_info['error']}")
 
     except Exception as e:
-        current_app.logger.error(f"'{provider}' 的逆地理编码过程中发生异常: {e}")
+        current_app.logger.warning("'%s' 的逆地理编码请求失败", provider)
     
     return winner_result
 
@@ -197,88 +219,61 @@ async def _get_best_geocode_result(address, user_id, parsed_original_address: di
         CONFIDENCE_THRESHOLD = current_app.config.get('REQUIRED_CONFIDENCE_THRESHOLD', 0.9)
         debug_trace['threshold'] = CONFIDENCE_THRESHOLD
 
-        # --- SOP 步骤 2: 核心瀑布流逻辑 (已修正为短路模式) ---
-    
-        # 2.1. 第一顺位：天地图
-        current_app.logger.info("SOP第2.1步：尝试天地图...")
-        try:
-            geocoder_tianditu = geocoding_apis.get_geocoder('tianditu', user_id)
-            result_tianditu = await geocoder_tianditu.geocode(address)
-            if 'error' not in result_tianditu:
-                confidence_tianditu = address_processing.calculate_confidence_B('tianditu', result_tianditu)
-                result_tianditu['calculated_confidence'] = confidence_tianditu
-                all_api_results.append({'api': 'tianditu', 'result': result_tianditu})
-                candidate_results.append(result_tianditu)
+        # --- SOP 步骤 2: 核心瀑布流逻辑（按业务优先级短路） ---
+        providers = (
+            ('baidu', '百度地图'),
+            ('tianditu', '天地图'),
+            ('amap', '高德地图'),
+        )
+        for step, (provider, provider_name) in enumerate(providers, start=1):
+            current_app.logger.info("SOP第2.%s步：尝试%s...", step, provider_name)
+            try:
+                geocoder = geocoding_apis.get_geocoder(provider, user_id)
+                result = (
+                    await geocoder.geocode(address, parsed_original_address)
+                    if provider == 'amap' else await geocoder.geocode(address)
+                )
+                if 'error' in result:
+                    current_app.logger.warning("%s地理编码失败: %s", provider_name, result.get('error'))
+                    continue
+
+                confidence = (
+                    result.get('confidence', 0.0)
+                    if provider == 'amap'
+                    else address_processing.calculate_confidence_B(provider, result)
+                )
+                result['calculated_confidence'] = confidence
+                all_api_results.append({'api': provider, 'result': result})
+                candidate_results.append(result)
                 if debug:
-                    debug_trace['providers'].append({'api': 'tianditu', 'confidence': confidence_tianditu, 'accepted_immediately': confidence_tianditu >= CONFIDENCE_THRESHOLD, 'summary': result_tianditu.get('formatted_address')})
-                current_app.logger.info(f"天地图处理完成，坐标: ({result_tianditu.get('longitude_gcj02')}, {result_tianditu.get('latitude_gcj02')}), Level: '{result_tianditu.get('level', 'N/A')}', 置信度: {confidence_tianditu:.2%}")
-                if confidence_tianditu >= CONFIDENCE_THRESHOLD:
-                    current_app.logger.info(f"天地图结果满足阈值，决策完成。")
-                    winner = result_tianditu
-                    # 短路：直接进入后续处理
-                    debug_trace['winner_before_post'] = {'api': winner.get('source'), 'confidence': winner.get('calculated_confidence')}
-                    processed_winner = await _post_process_winner(winner, user_id, parsed_original_address)
-                    debug_trace['winner_after_post'] = {'api': processed_winner.get('source'), 'formatted_address': processed_winner.get('formatted_address')}
+                    debug_trace['providers'].append({
+                        'api': provider,
+                        'confidence': confidence,
+                        'accepted_immediately': confidence >= CONFIDENCE_THRESHOLD,
+                        'summary': result.get('formatted_address'),
+                    })
+                current_app.logger.info("%s处理完成，置信度: %.2f%%", provider_name, confidence * 100)
+                if confidence >= CONFIDENCE_THRESHOLD:
+                    current_app.logger.info("%s结果满足阈值，决策完成。", provider_name)
+                    debug_trace['winner_before_post'] = {
+                        'api': result.get('source'),
+                        'confidence': result.get('calculated_confidence'),
+                    }
+                    processed_winner = await _post_process_winner(result, user_id, parsed_original_address)
+                    debug_trace['winner_after_post'] = {
+                        'api': processed_winner.get('source'),
+                        'formatted_address': processed_winner.get('formatted_address'),
+                    }
                     payload = {'winner': processed_winner, 'all_results': all_api_results}
                     if debug:
                         payload['debug'] = debug_trace
                     return payload
-            else:
-                current_app.logger.warning(f"天地图地理编码失败: {result_tianditu.get('error')}")
-        except Exception as e:
-            current_app.logger.error(f"天地图地理编码过程中发生异常: {e}")
-
-        # 2.2. 第二顺位：高德地图
-        current_app.logger.info("SOP第2.2步：尝试高德地图...")
-        try:
-            geocoder_amap = geocoding_apis.get_geocoder('amap', user_id)
-            result_amap = await geocoder_amap.geocode(address, parsed_original_address)
-            if 'error' not in result_amap:
-                confidence_amap = result_amap.get('confidence', 0.0)
-                result_amap['calculated_confidence'] = confidence_amap
-                all_api_results.append({'api': 'amap', 'result': result_amap})
-                candidate_results.append(result_amap)
-                if debug:
-                    debug_trace['providers'].append({'api': 'amap', 'confidence': confidence_amap, 'accepted_immediately': confidence_amap >= CONFIDENCE_THRESHOLD, 'summary': result_amap.get('formatted_address')})
-                current_app.logger.info(f"高德地图处理完成，地址: '{result_amap.get('formatted_address', 'N/A')}', 置信度: {confidence_amap:.2%}")
-                if confidence_amap >= CONFIDENCE_THRESHOLD:
-                    current_app.logger.info(f"高德地图结果满足阈值，决策完成。")
-                    winner = result_amap
-                    # 短路：直接进入后续处理
-                    debug_trace['winner_before_post'] = {'api': winner.get('source'), 'confidence': winner.get('calculated_confidence')}
-                    processed_winner = await _post_process_winner(winner, user_id, parsed_original_address)
-                    debug_trace['winner_after_post'] = {'api': processed_winner.get('source'), 'formatted_address': processed_winner.get('formatted_address')}
-                    payload = {'winner': processed_winner, 'all_results': all_api_results}
-                    if debug:
-                        payload['debug'] = debug_trace
-                    return payload
-            else:
-                current_app.logger.warning(f"高德地图地理编码失败: {result_amap.get('error')}")
-        except Exception as e:
-            current_app.logger.error(f"高德地图地理编码过程中发生异常: {e}")
-
-        # 2.3. 第三顺位：百度地图
-        current_app.logger.info("SOP第2.3步：尝试百度地图...")
-        try:
-            geocoder_baidu = geocoding_apis.get_geocoder('baidu', user_id)
-            result_baidu = await geocoder_baidu.geocode(address)
-            if 'error' not in result_baidu:
-                confidence_baidu = address_processing.calculate_confidence_B('baidu', result_baidu)
-                result_baidu['calculated_confidence'] = confidence_baidu
-                all_api_results.append({'api': 'baidu', 'result': result_baidu})
-                candidate_results.append(result_baidu)
-                if debug:
-                    debug_trace['providers'].append({'api': 'baidu', 'confidence': confidence_baidu, 'accepted_immediately': confidence_baidu >= CONFIDENCE_THRESHOLD, 'summary': result_baidu.get('formatted_address')})
-                current_app.logger.info(f"百度地图处理完成，坐标: ({result_baidu.get('longitude_gcj02')}, {result_baidu.get('latitude_gcj02')}), Level: '{result_baidu.get('level', 'N/A')}', 置信度: {confidence_baidu:.2%}")
-                # 这是最后一个，无需检查阈值短路
-            else:
-                current_app.logger.warning(f"百度地图地理编码失败: {result_baidu.get('error')}")
-        except Exception as e:
-            current_app.logger.error(f"百度地图地理编码过程中发生异常: {e}")
+            except Exception:
+                current_app.logger.warning("%s地理编码请求失败", provider_name, exc_info=True)
 
         # --- SOP 步骤 4: 最终选择阶段 (Fallback) ---
         if not candidate_results:
-            current_app.logger.error(f"所有地理编码服务对地址 '{address}' 的处理均失败。")
+            current_app.logger.warning("所有地理编码服务均未返回可用结果")
             return {'winner': {'error': '所有地理编码服务均失败。'}, 'all_results': all_api_results}
 
         # 如果没有任何服务商满足阈值，则从所有候选者中选择分数最高的
@@ -343,7 +338,9 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
     try:
         current_app.logger.info("开始批量语义预分析...")
         completed_addresses = [item['completed_address'] for item in pre_processed_data]
-        semantic_analysis_result = await llm_service.batch_semantic_analysis(completed_addresses)
+        semantic_analysis_result = await llm_service.batch_semantic_analysis(
+            completed_addresses, user_id=user_id
+        )
         if semantic_analysis_result and not semantic_analysis_result.get('error'):
             current_app.logger.info(f"批量语义预分析完成，主题名称: {semantic_analysis_result.get('theme_name', '未知')}")
         else:
@@ -475,9 +472,12 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
         all_results_for_frontend.append(final_result_item)
     
     # 构造包含语义分析结果的返回数据
+    client_semantic_analysis = dict(semantic_analysis_result or {})
+    if client_semantic_analysis.get('error'):
+        client_semantic_analysis['error'] = '语义分析暂时不可用'
     response_data = {
         'results': all_results_for_frontend,
-        'semantic_analysis': semantic_analysis_result
+        'semantic_analysis': client_semantic_analysis
     }
     if debug:
         # 把每个地址的调试跟踪也返回
@@ -528,52 +528,73 @@ def geocode_address_batch():
             return jsonify({'success': False, 'results': [], 'message': '无效的请求数据'}), 400
 
         raw_addresses = data.get('addresses', [])
-        if not raw_addresses:
+        if not isinstance(raw_addresses, list) or not raw_addresses:
             return jsonify({'success': False, 'results': [], 'message': 'Addresses list cannot be empty'}), 400
+        if len(raw_addresses) > 500:
+            return jsonify({'success': False, 'results': [], 'message': '单次最多处理 500 个地址'}), 413
+        if any(not isinstance(address, str) or len(address) > 500 for address in raw_addresses):
+            return jsonify({'success': False, 'results': [], 'message': '地址格式无效或长度超过限制'}), 400
 
         user_id = current_user.id if current_user.is_authenticated else None
 
         # Debug flag
-        debug = bool(data.get('debug'))
+        debug = bool(data.get('debug')) and current_user.is_admin
         # Run the async core logic
         response_data = asyncio.run(_process_batch_geocoding_async(raw_addresses, user_id, debug))
         
-        # 构造响应，确保向后兼容
+        results = response_data.get('results', [])
+        failed_count = sum(
+            1 for item in results
+            if (item.get('selected_result') or {}).get('api') == 'error'
+        )
+        all_failed = bool(results) and failed_count == len(results)
+        response_status = 502 if all_failed else 200
         return jsonify({
-            'success': True, 
-            'results': response_data.get('results', []),
+            'success': not all_failed,
+            'results': results,
+            'failed_count': failed_count,
+            'message': '所有地图服务均未返回可用结果' if all_failed else None,
             'semantic_analysis': response_data.get('semantic_analysis'),
             'debug': response_data.get('debug') if debug else None
-        })
+        }), response_status
 
     except Exception as e:
         current_app.logger.error(f"批量地理编码主路由发生异常: {e}", exc_info=True)
-        return jsonify({'success': False, 'results': [], 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'results': [], 'message': '服务器内部错误'}), 500
 
 # === Web Intelligence (三步骤) 路由 ===
 @geocoding_bp.route('/web_intelligence/search_collate', methods=['POST'])
+@login_required
 def wi_search_collate():
+    charged_points = 0
     try:
         data = request.get_json() or {}
         original_address = data.get('original_address', '').strip()
         if not original_address:
             return jsonify({'success': False, 'message': 'original_address 不能为空'}), 400
 
+        charged_points, error_response, error_status = _charge_points_or_402(
+            'web_search', current_user.id
+        )
+        if error_response:
+            return error_response, error_status
+
         current_app.logger.info(f"[WI-START] Starting web intelligence search for address: '{original_address}'")
 
-        # 根据需求：直接跳过联网LLM与DuckDuckGo，走本地搜狗抓取
-        sogou_items = search_sogou(original_address, max_results=8)
+        # 使用 URPA 同款 SearXNG；服务不可用或无结果时由统一入口降级到搜狗。
+        search_items = search_web(original_address, max_results=8)
+        search_provider = search_items[0].get('provider', 'searxng') if search_items else 'searxng'
 
         # 针对每条结果：记录原文、构造LLM提示词、调用LLM做摘录、判断是否有效
         collated = []
-        for idx, item in enumerate(sogou_items):
+        for idx, item in enumerate(search_items):
             raw_content = (item.get('raw_content') or '').strip()
             title = item.get('title') or ''
             url = item.get('url') or ''
 
             if not raw_content or len(raw_content) < 80:
                 # 原文过短，跳过
-                current_app.logger.info(f"[WI][Sogou][skip-short] #{idx+1} {title} {url}")
+                current_app.logger.info(f"[WI][Web][skip-short] #{idx+1} {title} {url}")
                 continue
 
             # 构造提示词（按长度截断）
@@ -594,15 +615,17 @@ def wi_search_collate():
 
             # 调用LLM（使用现有的聊天接口而非联网搜索）
             try:
-                llm_resp = asyncio.run(llm_service.call_llm_api(llm_prompt))
+                llm_resp = asyncio.run(llm_service.call_llm_api(
+                    llm_prompt, user_id=current_user.id
+                ))
                 llm_text = (llm_resp or {}).get('content') or ''
             except Exception as e:
-                current_app.logger.error(f"[WI][Sogou][llm-fail] #{idx+1} {title}: {e}")
+                current_app.logger.error(f"[WI][Web][llm-fail] #{idx+1} {title}: {e}")
                 llm_text = ''
 
             # 后台记录：原文、提示词、结果
             current_app.logger.info(
-                f"\n[WI][Sogou][#{idx+1}] URL: {url}\n[RAW]\n{truncated}\n\n[PROMPT]\n{llm_prompt}\n\n[LLM]\n{llm_text}\n"
+                f"\n[WI][Web][#{idx+1}] URL: {url}\n[RAW]\n{truncated}\n\n[PROMPT]\n{llm_prompt}\n\n[LLM]\n{llm_text}\n"
             )
 
             # 有效性判断（简单启发式）
@@ -639,7 +662,9 @@ def wi_search_collate():
         final_lines: list[str] = []
         if agg_input_lines:
             try:
-                agg_resp = asyncio.run(llm_service.call_llm_api(agg_prompt))
+                agg_resp = asyncio.run(llm_service.call_llm_api(
+                    agg_prompt, user_id=current_user.id
+                ))
                 agg_text = (agg_resp or {}).get('content') or ''
                 final_lines = [ln.strip('- ').strip() for ln in agg_text.split('\n') if ln.strip() and '无相关信息' not in ln]
             except Exception as e:
@@ -661,36 +686,28 @@ def wi_search_collate():
 
         dossier = {
             'original_address': original_address,
-            'web_search_results_count': len(sogou_items),
+            'web_search_results_count': len(search_items),
             'collated_excerpts': final_excerpts if final_excerpts else collated,
-            'source': 'sogou_local',
+            'source': search_provider,
             'debug': {
                 'aggregate_prompt': agg_prompt,
                 'aggregate_input_count': len(agg_input_lines)
             }
         }
 
-        # 新策略：网络搜索（本地搜狗抓取也视为“网络搜索”）按 2 分计费
-        try:
-            if current_user.is_authenticated:
-                user_id = current_user.id
-                points_to_deduct = get_points_cost('web_search', used_user_key=False)
-                if points_to_deduct and points_to_deduct > 0:
-                    deduct_points(user_id, points_to_deduct)
-                    current_app.logger.info(f"计费：网络搜索 扣除 {points_to_deduct} 积分。")
-        except Exception as e:
-            current_app.logger.error(f"网络搜索扣分异常: {e}")
-
         if not (final_excerpts or collated):
             return jsonify({'success': False, 'dossier': dossier, 'message': '未提取到有效定位信息'}), 200
         return jsonify({'success': True, 'dossier': dossier, 'message': None})
     except Exception as e:
+        refund_points(current_user.id, charged_points)
         current_app.logger.error(f"/web_intelligence/search_collate 异常: {e}")
-        return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 
 @geocoding_bp.route('/web_intelligence/validate_candidates', methods=['POST'])
+@login_required
 def wi_validate_candidates():
+    charged_points = 0
     try:
         data = request.get_json() or {}
         dossier = data.get('dossier') or {}
@@ -698,10 +715,18 @@ def wi_validate_candidates():
         if not poi_candidates:
             return jsonify({'success': False, 'message': 'poi_candidates 不能为空'}), 400
 
+        charged_points, error_response, error_status = _charge_points_or_402(
+            'llm_call', current_user.id
+        )
+        if error_response:
+            return error_response, error_status
+
         original_address = dossier.get('original_address') or ''
 
         # 使用LLM结合情报进行验证
-        decision = asyncio.run(llm_service.validate_poi_with_dossier(original_address, poi_candidates, dossier))
+        decision = asyncio.run(llm_service.validate_poi_with_dossier(
+            original_address, poi_candidates, dossier, user_id=current_user.id
+        ))
 
         response_payload = {
             'success': True,
@@ -712,37 +737,32 @@ def wi_validate_candidates():
             'validation_reason': decision.get('validation_reason') or '',
             'mismatch_reasons': decision.get('mismatch_reasons') or []
         }
-        # 新策略：本接口会触发一次 LLM 调用，按 2 分计费
-        try:
-            if current_user.is_authenticated:
-                user_id = current_user.id
-                points_to_deduct = get_points_cost('llm_call', used_user_key=False)
-                if points_to_deduct and points_to_deduct > 0:
-                    deduct_points(user_id, points_to_deduct)
-                    current_app.logger.info(f"计费：POI验证 LLM 扣除 {points_to_deduct} 积分。")
-                
-                # 返回最新的用户信息
-                updated_user = user_service.get_user_by_id(user_id)
-                if updated_user:
-                    response_payload['user'] = {
-                        'points': updated_user.points
-                    }
-        except Exception as e:
-            current_app.logger.error(f"POI验证扣分或刷新用户信息异常: {e}")
+        updated_user = user_service.get_user_by_id(current_user.id)
+        if updated_user:
+            response_payload['user'] = {'points': updated_user.points}
 
         return jsonify(response_payload)
     except Exception as e:
+        refund_points(current_user.id, charged_points)
         current_app.logger.error(f"/web_intelligence/validate_candidates 异常: {e}")
-        return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 
 @geocoding_bp.route('/web_intelligence/suggest_keywords', methods=['POST'])
+@login_required
 def wi_suggest_keywords():
+    charged_points = 0
     try:
         data = request.get_json() or {}
         original_address = (data.get('original_address') or '').strip()
         dossier = data.get('dossier') or {}
         mismatch_reasons = data.get('mismatch_reasons') or []
+
+        charged_points, error_response, error_status = _charge_points_or_402(
+            'llm_call', current_user.id
+        )
+        if error_response:
+            return error_response, error_status
 
         # 优先：调用LLM生成关键词（JSON）
         excerpts = []
@@ -882,34 +902,25 @@ def wi_suggest_keywords():
             seen_queries.add(s['query'])
         suggestions = uniq[:12]
 
-        # 新策略：本接口会触发一次 LLM 调用，按 2 分计费
-        try:
-            if current_user.is_authenticated:
-                user_id = current_user.id
-                points_to_deduct = get_points_cost('llm_call', used_user_key=False)
-                if points_to_deduct and points_to_deduct > 0:
-                    deduct_points(user_id, points_to_deduct)
-                    current_app.logger.info(f"计费：关键词建议 LLM 扣除 {points_to_deduct} 积分。")
-        except Exception as e:
-            current_app.logger.error(f"关键词建议扣分异常: {e}")
-
         response_data = {'success': True, 'keyword_suggestions': suggestions, 'mismatch_reasons': mismatch_reasons}
-        if current_user.is_authenticated:
-            updated_user = user_service.get_user_by_id(current_user.id)
-            if updated_user:
-                response_data['user'] = {'points': updated_user.points}
+        updated_user = user_service.get_user_by_id(current_user.id)
+        if updated_user:
+            response_data['user'] = {'points': updated_user.points}
 
         return jsonify(response_data)
     except Exception as e:
+        refund_points(current_user.id, charged_points)
         current_app.logger.error(f"/web_intelligence/suggest_keywords 异常: {e}")
-        return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 @geocoding_bp.route('/poi_search', methods=['POST'])
+@login_required
 @decorators.async_route
 async def poi_search_route():
     """
     Handles POI search requests from different map providers.
     """
+    charged_points = 0
     try:
         data = request.get_json()
         if not data:
@@ -917,7 +928,7 @@ async def poi_search_route():
 
         keyword = data.get('keyword')
         source = data.get('source', 'amap') # Default to amap if not provided
-        user_id = current_user.id if current_user.is_authenticated else None
+        user_id = current_user.id
 
         if not keyword:
             return jsonify({'success': False, 'results': [], 'message': '搜索关键词不能为空'}), 400
@@ -928,27 +939,20 @@ async def poi_search_route():
         if searcher is None:
             return jsonify({'success': False, 'results': [], 'message': f"不支持的搜索源: {source}"}), 400
 
+        task_key = f"poi_search_{(source or '').lower()}"
+        charged_points, error_response, error_status = _charge_points_or_402(task_key, user_id)
+        if error_response:
+            return error_response, error_status
+
         # Perform the search
         results = await searcher.search(keyword)
         
         # The 'results' from the searcher should already be in the correct format.
         # It usually returns a dictionary like {'pois': [...]} or {'error': ...}
         if 'error' in results:
+            refund_points(user_id, charged_points)
+            charged_points = 0
             return jsonify({'success': False, 'results': [], 'message': results['error']}), 500
-
-        # 新策略：按源扣积分（天地图0，高德/百度2）
-        try:
-            if user_id:
-                src = (source or '').lower()
-                if src in ('amap', 'baidu', 'tianditu'):
-                    task_key = f"poi_search_{src}"
-                    used_user_key = False  # POI搜索不区分用户Key优惠，统一价
-                    points_to_deduct = get_points_cost(task_key, used_user_key)
-                    if points_to_deduct and points_to_deduct > 0:
-                        deduct_points(user_id, points_to_deduct)
-                        current_app.logger.info(f"计费：POI搜索[{src}] 扣除 {points_to_deduct} 积分。")
-        except Exception as e:
-            current_app.logger.error(f"POI搜索扣分异常: {e}")
 
         response_data = {'success': True, 'results': results.get('pois', [])}
         if user_id:
@@ -959,16 +963,19 @@ async def poi_search_route():
         return jsonify(response_data)
 
     except Exception as e:
+        refund_points(current_user.id, charged_points)
         current_app.logger.error(f"POI搜索路由 /poi_search 发生异常: {e}", exc_info=True)
-        return jsonify({'success': False, 'results': [], 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'results': [], 'message': '服务器内部错误'}), 500
 
 @geocoding_bp.route('/auto_select_point', methods=['POST'])
+@login_required
 @decorators.async_route
 async def auto_select_point_route():
     """
     智能自动选点路由。
     接收一个原始地址和一个POI列表，使用LLM来决策最佳匹配项。
     """
+    charged_points = 0
     try:
         data = request.get_json()
         if not data:
@@ -978,10 +985,16 @@ async def auto_select_point_route():
         pois = data.get('pois') or data.get('poi_results')
         original_address = data.get('original_address')
         source_context = data.get('source_context', '无附加上下文')
-        user_id = current_user.id if current_user.is_authenticated else None
+        user_id = current_user.id
 
         if not pois or not original_address:
             return jsonify({'success': False, 'message': '缺少POI列表或原始地址'}), 400
+
+        charged_points, error_response, error_status = _charge_points_or_402(
+            'llm_call', user_id
+        )
+        if error_response:
+            return error_response, error_status
 
         # 调用LLM服务进行决策
         current_app.logger.info(f"开始LLM智能选点：原始地址='{original_address}', POI数量={len(pois)}, 来源上下文='{source_context}'")
@@ -994,16 +1007,6 @@ async def auto_select_point_route():
         current_app.logger.info(f"LLM选点结果：{json.dumps(selected_poi, ensure_ascii=False)}")
 
         if selected_poi and 'error' not in selected_poi:
-            # 新策略：一次 LLM 调用扣 2 分
-            try:
-                if user_id:
-                    points_to_deduct = get_points_cost('llm_call', used_user_key=False)
-                    if points_to_deduct and points_to_deduct > 0:
-                        deduct_points(user_id, points_to_deduct)
-                        current_app.logger.info(f"计费：LLM选点 扣除 {points_to_deduct} 积分。")
-            except Exception as e:
-                current_app.logger.error(f"LLM选点扣分异常: {e}")
-
             # 使用LLM返回的索引信息
             index = selected_poi.get('selected_index')
             if index is not None and 0 <= index < len(pois):
@@ -1021,19 +1024,24 @@ async def auto_select_point_route():
                         }
                 return jsonify(response_data)
             else:
+                refund_points(user_id, charged_points)
                 return jsonify({'success': False, 'message': 'LLM未返回有效的索引信息'})
         elif selected_poi and 'error' in selected_poi:
             # 如果LLM服务返回了一个特定的错误信息
+            refund_points(user_id, charged_points)
             return jsonify({'success': False, 'message': selected_poi['error']})
         else:
             # 如果没有选出任何点
+            refund_points(user_id, charged_points)
             return jsonify({'success': False, 'message': '未能决策出最佳匹配点'})
 
     except Exception as e:
+        refund_points(current_user.id, charged_points)
         current_app.logger.error(f"路由 /auto_select_point 发生异常: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500 
+        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 @geocoding_bp.route('/reverse_geocode', methods=['POST'])
+@login_required
 @decorators.async_route
 async def reverse_geocode_route():
     """
@@ -1052,7 +1060,7 @@ async def reverse_geocode_route():
         if lat is None or lng is None:
             return jsonify({'success': False, 'message': '缺少坐标参数'}), 400
 
-        user_id = current_user.id if current_user.is_authenticated else None
+        user_id = current_user.id
         
         # 使用统一的地理编码器工厂方法
         try:
@@ -1078,7 +1086,7 @@ async def reverse_geocode_route():
 
     except Exception as e:
         current_app.logger.error(f"逆地理编码路由 /reverse_geocode 发生异常: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': f'服务器内部错误: {str(e)}'}), 500
+        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
 
 @geocoding_bp.route('/get_approved_suffixes', methods=['GET'])
 def get_approved_suffixes():

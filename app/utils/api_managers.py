@@ -62,17 +62,17 @@ class APIKeyManager:
         elif reason == REASON_QUOTA_EXCEEDED:
             key_entry.status = 'quota_exceeded'
             key_entry.cooldown_until = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            key_entry.failure_count = 0
+            key_entry.fail_count = 0
         elif reason == REASON_RATE_LIMITED:
             key_entry.status = 'rate_limited'
             key_entry.cooldown_until = datetime.utcnow() + timedelta(minutes=5)
-            key_entry.failure_count = 0
+            key_entry.fail_count = 0
         else: # REASON_OTHER
-            key_entry.failure_count = (key_entry.failure_count or 0) + 1
-            if key_entry.failure_count >= 3:
+            key_entry.fail_count = (key_entry.fail_count or 0) + 1
+            if key_entry.fail_count >= 3:
                 key_entry.status = 'rate_limited'
                 key_entry.cooldown_until = datetime.utcnow() + timedelta(minutes=5)
-                key_entry.failure_count = 0
+                key_entry.fail_count = 0
         
         db.session.commit()
         
@@ -80,8 +80,8 @@ class APIKeyManager:
         """Reports a successful API call, resetting failure count."""
         key_entry = UserApiKey.query.filter_by(key_value=api_key).first()
         if key_entry:
-            key_entry.failure_count = 0
-            key_entry.last_used_time = datetime.utcnow()
+            key_entry.fail_count = 0
+            key_entry.last_checked = datetime.utcnow()
             db.session.commit()
 
     def _unfreeze_keys(self):
@@ -98,7 +98,7 @@ class APIKeyManager:
 
     def _update_last_used(self, key_entry):
         """Updates the last used timestamp for a key."""
-        key_entry.last_used_time = datetime.utcnow()
+        key_entry.last_checked = datetime.utcnow()
         db.session.commit()
 
 # API Rate Limiter (no changes needed, it's independent of the database)
@@ -121,4 +121,4 @@ class APIRateLimiter:
         self.requests.append(time.time())
 
 # Global limiter instances
-baidu_limiter = APIRateLimiter(30) 
+baidu_limiter = APIRateLimiter(30)

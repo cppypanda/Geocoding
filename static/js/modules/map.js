@@ -1,4 +1,4 @@
-import { addMarkersToMapAndFitBounds } from './utils.js';
+import { addMarkersToMapAndFitBounds, escapeHtml } from './utils.js';
 
 let itemCalibrationMap; // Main map for single item view
 let resultsOverviewMap; // Overview map for all selected results
@@ -148,7 +148,7 @@ export function showLocationOnMap(map, lat_gcj02, lng_gcj02, address, details_ht
     const latLng = [lat_gcj02, lng_gcj02];
     map.setView(latLng, 15);
     singleLocationMarker = L.marker(latLng).addTo(map)
-        .bindPopup(`<b>${address}</b><br>${details_html}`)
+        .bindPopup(`<b>${escapeHtml(address)}</b><br>${details_html}`)
         .openPopup();
 }
 
@@ -281,4 +281,4 @@ export function highlightMapSearchResult(map, index) {
             }, 2000); // Highlight for 2 seconds
         }
     }
-} 
+}

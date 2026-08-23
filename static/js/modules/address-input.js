@@ -34,7 +34,11 @@ function updateLocationTypeTagsDisplay() {
     locationTypeTags.forEach(tag => {
         const tagElement = document.createElement('div');
         tagElement.className = 'location-type-tag';
-        tagElement.innerHTML = `${tag}<span class="remove-tag">&times;</span>`;
+        tagElement.appendChild(document.createTextNode(tag));
+        const removeButton = document.createElement('span');
+        removeButton.className = 'remove-tag';
+        removeButton.textContent = '×';
+        tagElement.appendChild(removeButton);
         
         // 添加删除事件监听器
         tagElement.querySelector('.remove-tag').addEventListener('click', () => {
@@ -271,4 +275,4 @@ export function initializeAddressInput() {
         getLocationTypeTags: () => Array.from(locationTypeTags),
         autoCompleteAddresses: autoCompleteAddresses
     };
-} 
+}

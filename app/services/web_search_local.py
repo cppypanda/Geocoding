@@ -1,3 +1,4 @@
+import os
 import re
 import urllib.parse
 import requests
@@ -10,6 +11,22 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9",
     "Connection": "keep-alive",
 }
+
+DEFAULT_SEARXNG_URL = "http://127.0.0.1:8888"
+
+
+def _get_searxng_url() -> str:
+    """Return the configured SearXNG endpoint without a trailing slash."""
+    configured = current_app.config.get('SEARXNG_URL') or os.environ.get('SEARXNG_URL')
+    return (configured or DEFAULT_SEARXNG_URL).strip().rstrip('/')
+
+
+def _get_searxng_headers() -> dict[str, str]:
+    headers = {'Accept': 'application/json'}
+    api_key = current_app.config.get('SEARXNG_API_KEY') or os.environ.get('SEARXNG_API_KEY')
+    if api_key:
+        headers['X-SearXNG-Token'] = api_key.strip()
+    return headers
 
 def _fix_weixin_url(url: str) -> str:
     try:
@@ -126,6 +143,89 @@ def _extract_relevant_sentences(original_address: str, text: str, max_sentences:
     return '。'.join(picked)
 
 
+def search_searxng(query: str, max_results: int = 10) -> list[dict]:
+    """通过 URPA 同款 SearXNG JSON API 搜索并补抓网页正文。"""
+    if not query:
+        return []
+
+    base_url = _get_searxng_url()
+    try:
+        response = requests.get(
+            f"{base_url}/search",
+            params={'q': query, 'format': 'json', 'pageno': 1},
+            headers=_get_searxng_headers(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        current_app.logger.warning(
+            "SearXNG 搜索失败，将尝试搜狗降级。endpoint=%s error=%s",
+            base_url,
+            type(exc).__name__,
+        )
+        return []
+
+    raw_results = payload.get('results') if isinstance(payload, dict) else []
+    if not isinstance(raw_results, list):
+        current_app.logger.warning("SearXNG 返回了无效的 results 字段。endpoint=%s", base_url)
+        return []
+
+    def result_score(item):
+        try:
+            return float(item.get('score') or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0.0
+
+    results: list[dict] = []
+    seen_urls: set[str] = set()
+    for item in sorted(raw_results, key=result_score, reverse=True):
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get('url') or '').strip()
+        if not url or url in seen_urls or not url.lower().startswith(('http://', 'https://')):
+            continue
+        seen_urls.add(url)
+
+        title = re.sub(r"\s+", " ", str(item.get('title') or '')).strip()
+        description = re.sub(r"\s+", " ", str(item.get('content') or '')).strip()
+        body_text = _get_article_content(url)
+        analysis_content = body_text or description
+        picked = _extract_relevant_sentences(query, body_text, max_sentences=3)
+        excerpt_core = picked or description or title
+        if not excerpt_core:
+            continue
+
+        excerpt = (
+            f"{title}：{excerpt_core}"
+            if title and not excerpt_core.startswith(title)
+            else excerpt_core
+        )
+        engines = item.get('engines') or ([item.get('engine')] if item.get('engine') else [])
+        results.append({
+            'title': title,
+            'url': url,
+            'description': description,
+            'excerpt': excerpt[:800],
+            'sources': [url],
+            # 部分站点会拒绝正文抓取；此时保留 SearXNG 聚合出的搜索摘要，
+            # 避免后续情报整理链路因为正文为空而直接丢弃该结果。
+            'raw_content': analysis_content,
+            'provider': 'searxng',
+            'engines': [str(engine) for engine in engines if engine],
+        })
+        if len(results) >= max_results:
+            break
+
+    current_app.logger.info(
+        "SearXNG 搜索 '%s' 返回 %s 条可用结果（原始结果 %s 条）。",
+        query,
+        len(results),
+        len(raw_results),
+    )
+    return results
+
+
 def search_sogou(query: str, max_results: int = 10) -> list[dict]:
     """使用搜狗网页搜索抓取前若干条搜索结果，输出简要摘录。
 
@@ -179,7 +279,9 @@ def search_sogou(query: str, max_results: int = 10) -> list[dict]:
                     'url': (real_url or href or ''),
                     'excerpt': excerpt[:800],
                     'sources': sources,
-                    'raw_content': body_text
+                    'raw_content': body_text,
+                    'provider': 'sogou_local',
+                    'engines': ['sogou'],
                 })
             if len(results) >= max_results:
                 break
@@ -189,5 +291,14 @@ def search_sogou(query: str, max_results: int = 10) -> list[dict]:
         pass
 
     return results
+
+
+def search_web(query: str, max_results: int = 10) -> list[dict]:
+    """统一网络搜索入口：SearXNG 优先，失败或无结果时降级到搜狗。"""
+    results = search_searxng(query, max_results=max_results)
+    if results:
+        return results
+    current_app.logger.info("SearXNG 未返回可用结果，开始使用搜狗降级搜索。")
+    return search_sogou(query, max_results=max_results)
 
 

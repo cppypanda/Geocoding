@@ -1,13 +1,24 @@
 import uuid
 import json
+import secrets
+import string
+from decimal import Decimal, InvalidOperation
 from flask import Blueprint, request, jsonify, current_app, render_template, abort, flash, redirect, url_for
 from flask_login import login_required, current_user
-from datetime import datetime
+from sqlalchemy import func, update
+from datetime import datetime, timedelta, timezone
 from .. import db, csrf
-from ..models import User, RechargeOrder, Notification, Feedback
+from ..models import User, RechargeOrder, Notification, Feedback, RechargeCard
+from ..services.payment_service import (
+    PaymentConfirmation,
+    PaymentProviderError,
+    create_yungou_alipay_payment,
+    get_yungou_config,
+    parse_yungou_notify,
+    query_yungou_order,
+)
+from ..utils.alipay import get_alipay_client
 from .admin import admin_required
-
-from app.utils.alipay import get_alipay_client
 
 payment_bp = Blueprint('payment_bp', __name__)
 
@@ -21,133 +32,322 @@ def create_notification(user_id, message, link=None):
         db.session.rollback()
         current_app.logger.error(f"Failed to create notification for user {user_id}: {e}")
 
-# In a real app, this might come from a database. For now, using config.
-RECHARGE_PACKAGES_CONFIG_KEY = 'RECHARGE_PACKAGES'
+def generate_card_code(length=16):
+    """Generate a random alphanumeric card code."""
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-@payment_bp.route('/create_recharge_order', methods=['POST'])
-@login_required
-def create_recharge_order():
-    """Creates a new recharge order and returns the order number."""
-    user_id = current_user.id
 
-    data = request.get_json()
-    package_id = data.get('package_id')
-    payment_method = data.get('payment_method') # e.g., 'alipay', 'wechat'
+def _external_payment_url(endpoint):
+    configured_base = (current_app.config.get('PAYMENT_PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    if configured_base:
+        return f"{configured_base}{url_for(endpoint)}"
+    return url_for(endpoint, _external=True, _scheme='https' if current_app.config.get('SESSION_COOKIE_SECURE') else None)
 
-    recharge_packages = current_app.config.get(RECHARGE_PACKAGES_CONFIG_KEY, {})
 
-    if not package_id or package_id not in recharge_packages:
-        return jsonify({'success': False, 'message': '无效的套餐'}), 400
+def _order_payload(order):
+    return {
+        'order_number': order.order_number,
+        'package_name': order.package_name,
+        'amount': float(order.amount),
+        'points': order.points,
+        'status': order.status,
+        'payment_method': order.payment_method,
+        'payment_url': order.payment_url,
+        'paid_at': order.paid_at.isoformat() if order.paid_at else None,
+    }
 
-    package = recharge_packages[package_id]
 
+def _parse_paid_at(value):
+    if not value:
+        return datetime.utcnow()
+    text = str(value).strip().replace('Z', '+00:00')
     try:
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        todays_order_count = RechargeOrder.query.filter(db.func.date(RechargeOrder.created_at) == today_str).count()
-        
-        date_part = datetime.now().strftime('%Y%m%d')
-        order_number = f"{date_part}-{todays_order_count + 1}"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        # 支付宝与 YunGouOS 的无时区时间均按北京时间返回。
+        return parsed - timedelta(hours=8)
+    except ValueError:
+        return datetime.utcnow()
 
-        new_order = RechargeOrder(
-            user_id=user_id,
-            order_number=order_number,
-            package_name=package['name'],
-            amount=package['price'],
-            points=package['points'],
-            status='PENDING',
-            payment_method=payment_method
-        )
-        db.session.add(new_order)
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'order_number': order_number,
-            'amount': package['price']
-        })
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Database error on order creation: {e}")
-        return jsonify({'success': False, 'message': '创建订单失败'}), 500
 
-@payment_bp.route('/initiate_payment', methods=['POST'])
-@login_required
-def initiate_payment():
-    """Receives a request to create an Alipay payment link for an order."""
-    user_id = current_user.id
-
-    data = request.get_json()
-    order_number = data.get('order_number')
-    if not order_number:
-        return jsonify({'success': False, 'message': '缺少订单号'}), 400
-
-    order = RechargeOrder.query.filter_by(order_number=order_number, user_id=user_id, status='PENDING').first()
-
+def _complete_recharge_order(confirmation: PaymentConfirmation):
+    """Atomically mark an order paid and grant its points exactly once."""
+    order = (
+        RechargeOrder.query
+        .filter_by(order_number=confirmation.order_number)
+        .with_for_update()
+        .first()
+    )
     if not order:
-        return jsonify({'success': False, 'message': '订单不存在或已处理'}), 404
-
-    alipay = get_alipay_client()
-    return_url = url_for('main.index', _external=True) 
-    notify_url = url_for('payment_bp.alipay_notify', _external=True)
+        raise PaymentProviderError('支付订单不存在')
+    if order.status == 'COMPLETED':
+        return order, True
 
     try:
-        order_string = alipay.api_alipay_trade_page_pay(
-            out_trade_no=order.order_number,
-            total_amount=float(order.amount),
-            subject=f"积分充值 - {order.package_name}",
-            return_url=return_url,
-            notify_url=notify_url
-        )
-        payment_url = alipay._gateway + "?" + order_string
-        return jsonify({'success': True, 'payment_url': payment_url})
-    except Exception as e:
-        current_app.logger.error(f"Failed to create Alipay payment URL for order {order_number}: {e}")
-        return jsonify({'success': False, 'message': '创建支付链接失败'}), 500
+        expected = Decimal(str(order.amount)).quantize(Decimal('0.01'))
+        received = Decimal(str(confirmation.amount_cny)).quantize(Decimal('0.01'))
+    except (InvalidOperation, ValueError) as exc:
+        raise PaymentProviderError('支付金额无效') from exc
+    if expected != received:
+        raise PaymentProviderError('支付金额与订单不匹配')
+
+    user = db.session.get(User, order.user_id)
+    if not user:
+        raise PaymentProviderError('支付订单所属用户不存在')
+
+    user.points = (user.points or 0) + order.points
+    order.status = 'COMPLETED'
+    order.provider_trade_no = confirmation.provider_trade_no
+    order.buyer_logon_id = confirmation.buyer_logon_id
+    order.notify_payload = confirmation.notify_payload
+    order.paid_at = _parse_paid_at(confirmation.paid_at)
+    order.updated_at = datetime.utcnow()
+    db.session.add(Notification(
+        user_id=user.id,
+        message=f"您的 {order.amount:.2f} 元充值已到账，{order.points} 积分已发放！",
+    ))
+    db.session.commit()
+    return order, False
+
+
+@payment_bp.route('/api/pay/recharge/setup', methods=['GET'])
+def recharge_payment_setup():
+    yungou = get_yungou_config(
+        current_app.config,
+        _external_payment_url('payment_bp.yungouos_notify'),
+    )
+    alipay_ready = all(current_app.config.get(name) for name in (
+        'ALIPAY_APP_ID', 'ALIPAY_PRIVATE_KEY', 'ALIPAY_PUBLIC_KEY'
+    ))
+    return jsonify({
+        'success': True,
+        'ready': bool(yungou or alipay_ready),
+        'provider': 'yungouos' if yungou else ('alipay' if alipay_ready else None),
+    })
+
+
+@payment_bp.route('/api/pay/recharge/create', methods=['POST'])
+@login_required
+def create_recharge_payment():
+    data = request.get_json(silent=True) or {}
+    package_id = (data.get('package_id') or '').strip()
+    packages = current_app.config.get('RECHARGE_PACKAGES', {})
+    package = packages.get(package_id)
+    if not package:
+        return jsonify({'success': False, 'message': '充值套餐无效'}), 400
+
+    yungou_notify_url = _external_payment_url('payment_bp.yungouos_notify')
+    yungou = get_yungou_config(current_app.config, yungou_notify_url)
+    alipay_ready = all(current_app.config.get(name) for name in (
+        'ALIPAY_APP_ID', 'ALIPAY_PRIVATE_KEY', 'ALIPAY_PUBLIC_KEY'
+    ))
+    if not yungou and not alipay_ready:
+        return jsonify({'success': False, 'message': '支付服务尚未配置'}), 503
+
+    provider = 'yungouos' if yungou else 'alipay'
+    order = RechargeOrder(
+        user_id=current_user.id,
+        order_number=f"GEO{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{secrets.randbelow(100000):05d}",
+        package_name=package['name'],
+        amount=float(package['price']),
+        points=int(package['points']),
+        status='PENDING',
+        payment_method=provider,
+    )
+    db.session.add(order)
+    try:
+        db.session.flush()
+        subject = f"GeoCoUI {package['name']} {package['points']}积分"
+        if yungou:
+            payment_url = create_yungou_alipay_payment(
+                order_number=order.order_number,
+                amount_cny=order.amount,
+                subject=subject,
+                points=order.points,
+                config=yungou,
+            )
+        else:
+            alipay = get_alipay_client()
+            order_string = alipay.api_alipay_trade_page_pay(
+                subject=subject,
+                out_trade_no=order.order_number,
+                total_amount=f"{order.amount:.2f}",
+                return_url=url_for('main.index', _external=True),
+                notify_url=(current_app.config.get('ALIPAY_NOTIFY_URL') or _external_payment_url('payment_bp.alipay_notify')),
+            )
+            payment_url = f"{alipay._gateway}?{order_string}"
+        order.payment_url = payment_url
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.error('创建充值支付订单失败: %s', exc, exc_info=True)
+        message = str(exc) if isinstance(exc, PaymentProviderError) else '创建支付订单失败，请稍后重试'
+        return jsonify({'success': False, 'message': message}), 502
+
+    return jsonify({'success': True, 'order': _order_payload(order)})
+
+
+@payment_bp.route('/api/pay/recharge/order', methods=['GET'])
+@login_required
+def recharge_payment_order():
+    order_number = (request.args.get('order_number') or '').strip()
+    order = RechargeOrder.query.filter_by(order_number=order_number, user_id=current_user.id).first()
+    if not order:
+        return jsonify({'success': False, 'message': '支付订单不存在'}), 404
+
+    warning = None
+    if order.status == 'PENDING':
+        try:
+            confirmation = None
+            if order.payment_method == 'yungouos':
+                config = get_yungou_config(
+                    current_app.config,
+                    _external_payment_url('payment_bp.yungouos_notify'),
+                )
+                if config:
+                    confirmation = query_yungou_order(order.order_number, config)
+            elif order.payment_method == 'alipay':
+                result = get_alipay_client().api_alipay_trade_query(out_trade_no=order.order_number)
+                if isinstance(result, dict) and result.get('trade_status') in ('TRADE_SUCCESS', 'TRADE_FINISHED'):
+                    confirmation = PaymentConfirmation(
+                        order_number=order.order_number,
+                        amount_cny=float(result.get('total_amount') or result.get('receipt_amount') or 0),
+                        paid=True,
+                        provider_trade_no=result.get('trade_no'),
+                        buyer_logon_id=result.get('buyer_logon_id'),
+                        paid_at=result.get('send_pay_date'),
+                        notify_payload=json.dumps(result, ensure_ascii=False),
+                    )
+            if confirmation and confirmation.paid:
+                order, _ = _complete_recharge_order(confirmation)
+        except Exception as exc:
+            db.session.rollback()
+            warning = '支付状态查询暂时不可用，将继续等待支付回调'
+            current_app.logger.warning('查询充值订单 %s 失败: %s', order.order_number, exc)
+
+    user = db.session.get(User, current_user.id)
+    return jsonify({
+        'success': True,
+        'order': _order_payload(order),
+        'total_points': user.points if user else None,
+        'warning': warning,
+    })
+
+
+@payment_bp.route('/api/pay/yungouos/notify', methods=['POST'])
+@csrf.exempt
+def yungouos_notify():
+    def respond(text):
+        return current_app.response_class(text, status=200, mimetype='text/plain')
+
+    config = get_yungou_config(
+        current_app.config,
+        _external_payment_url('payment_bp.yungouos_notify'),
+    )
+    if not config:
+        current_app.logger.warning('YunGouOS 回调失败：支付服务未配置')
+        return respond('fail')
+    try:
+        confirmation = parse_yungou_notify(request.form.to_dict(flat=True), config)
+        if confirmation.paid:
+            _complete_recharge_order(confirmation)
+        return respond('SUCCESS')
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.warning('YunGouOS 回调失败: %s', exc)
+        return respond('fail')
+
 
 @payment_bp.route('/payment/alipay_notify', methods=['POST'])
 @csrf.exempt
 def alipay_notify():
-    """Alipay asynchronous notification callback."""
-    data = request.form.to_dict()
-    signature = data.pop("sign")
-    current_app.logger.info(f"Received Alipay notification for data: {data}")
+    def respond(text):
+        return current_app.response_class(text, status=200, mimetype='text/plain')
 
-    alipay = get_alipay_client()
-    success = alipay.verify(data, signature)
+    data = request.form.to_dict(flat=True)
+    signature = data.pop('sign', '')
+    try:
+        if data.get('app_id') and data['app_id'] != current_app.config.get('ALIPAY_APP_ID'):
+            raise PaymentProviderError('支付回调应用 ID 不匹配')
+        if not signature or not get_alipay_client().verify(data, signature):
+            raise PaymentProviderError('支付回调签名验证失败')
+        status = data.get('trade_status')
+        if status in ('TRADE_SUCCESS', 'TRADE_FINISHED'):
+            _complete_recharge_order(PaymentConfirmation(
+                order_number=data.get('out_trade_no', ''),
+                amount_cny=float(data.get('total_amount') or data.get('receipt_amount') or 0),
+                paid=True,
+                provider_trade_no=data.get('trade_no'),
+                buyer_logon_id=data.get('buyer_logon_id'),
+                paid_at=data.get('gmt_payment'),
+                notify_payload=json.dumps(data, ensure_ascii=False),
+            ))
+        elif status == 'TRADE_CLOSED':
+            order = RechargeOrder.query.filter_by(order_number=data.get('out_trade_no', '')).first()
+            if order and order.status == 'PENDING':
+                order.status = 'CANCELLED'
+                order.notify_payload = json.dumps(data, ensure_ascii=False)
+                db.session.commit()
+        return respond('success')
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.warning('支付宝回调失败: %s', exc)
+        return respond('fail')
 
-    if success and data["trade_status"] in ("TRADE_SUCCESS", "TRADE_FINISHED"):
-        order_number = data.get('out_trade_no')
-        
-        try:
-            order = RechargeOrder.query.filter_by(order_number=order_number).first()
-            if not order:
-                current_app.logger.warning(f"Alipay notify: Order {order_number} not found.")
-                return "failure", 404
-            
-            if order.status == 'COMPLETED':
-                current_app.logger.info(f"Alipay notify: Order {order_number} already completed.")
-                return "success", 200
+@payment_bp.route('/redeem_card', methods=['POST'])
+@login_required
+def redeem_card():
+    """User redeems a recharge card code for points."""
+    data = request.get_json()
+    code = (data.get('code') or '').strip().upper()
 
-            order.status = 'COMPLETED'
-            order.payment_method = 'alipay' # Confirm payment method
-            order.updated_at = datetime.utcnow()
-            
-            user = User.query.get(order.user_id)
-            if user:
-                user.points += order.points
-            
-            db.session.commit()
-            
-            create_notification(order.user_id, f"您的订单 {order_number} 已支付成功，{order.points} 积分已到账！")
-            current_app.logger.info(f"Order {order_number} processed successfully.")
-            return "success", 200
-        except Exception as e:
+    if not code:
+        return jsonify({'success': False, 'message': '请输入卡密'}), 400
+
+    card = RechargeCard.query.filter_by(code=code).first()
+
+    if not card:
+        return jsonify({'success': False, 'message': '卡密无效'}), 404
+
+    if card.is_used:
+        return jsonify({'success': False, 'message': '该卡密已被使用'}), 400
+
+    if card.expires_at and card.expires_at < datetime.utcnow():
+        return jsonify({'success': False, 'message': '该卡密已过期'}), 400
+
+    try:
+        claimed = db.session.execute(
+            update(RechargeCard)
+            .where(RechargeCard.id == card.id, RechargeCard.is_used.is_(False))
+            .values(is_used=True, used_by=current_user.id, used_at=datetime.utcnow())
+        )
+        if claimed.rowcount != 1:
             db.session.rollback()
-            current_app.logger.error(f"Database error processing order {order_number}: {e}")
-            return "failure", 500
-    else:
-        current_app.logger.error(f"Alipay signature verification failed for data: {data}")
-        return "failure", 400
+            return jsonify({'success': False, 'message': '该卡密已被使用'}), 409
+        db.session.execute(
+            update(User)
+            .where(User.id == current_user.id)
+            .values(points=func.coalesce(User.points, 0) + card.points)
+        )
+        db.session.add(Notification(
+            user_id=current_user.id,
+            message=f"卡密兑换成功，{card.points} 积分已到账！",
+        ))
+        db.session.commit()
+        total_points = db.session.get(User, current_user.id).points
+
+        return jsonify({
+            'success': True,
+            'message': f'兑换成功！获得 {card.points} 积分',
+            'points_added': card.points,
+            'total_points': total_points
+        })
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Card redemption failed for code {code}: {e}")
+        return jsonify({'success': False, 'message': '兑换失败，请稍后重试'}), 500
 
 @payment_bp.route('/admin/orders')
 @admin_required
@@ -192,12 +392,15 @@ def admin_batch_action():
                 db.session.delete(order)
             elif action == 'confirm':
                 if order.status == 'PENDING':
-                    user = User.query.get(order.user_id)
+                    user = db.session.get(User, order.user_id)
                     if user:
                         user.points += order.points
                     order.status = 'COMPLETED'
                     order.updated_at = datetime.utcnow()
-                    create_notification(order.user_id, f"您的 {order.amount} 元充值已到账，{order.points} 积分已发放！")
+                    db.session.add(Notification(
+                        user_id=order.user_id,
+                        message=f"您的 {order.amount} 元充值已到账，{order.points} 积分已发放！",
+                    ))
                 else:
                     errors.append(f"订单 {order.order_number} 状态不正确，无法确认")
                     continue
@@ -223,6 +426,133 @@ def admin_batch_action():
     
     flash(message, 'success' if not errors else 'warning')
     return jsonify({'success': True, 'message': message})
+
+
+@payment_bp.route('/admin/cards', methods=['GET', 'POST'])
+@admin_required
+def admin_cards():
+    """Admin page to generate and manage recharge cards."""
+    if request.method == 'POST':
+        action = request.form.get('action')
+
+        if action == 'generate':
+            try:
+                count = int(request.form.get('count', '1').strip())
+                points = int(request.form.get('points', '100').strip())
+                expires_days = request.form.get('expires_days', '').strip()
+            except ValueError:
+                flash('参数格式错误', 'danger')
+                return redirect(url_for('payment_bp.admin_cards'))
+
+            if count < 1 or count > 1000:
+                flash('单次生成数量必须在 1-1000 之间', 'warning')
+                return redirect(url_for('payment_bp.admin_cards'))
+
+            if points < 1:
+                flash('积分必须大于 0', 'warning')
+                return redirect(url_for('payment_bp.admin_cards'))
+
+            expires_at = None
+            if expires_days:
+                try:
+                    days = int(expires_days)
+                    if days > 0:
+                        expires_at = datetime.utcnow() + timedelta(days=days)
+                except ValueError:
+                    pass
+
+            generated = []
+            for _ in range(count):
+                for _attempt in range(10):
+                    code = generate_card_code()
+                    existing = RechargeCard.query.filter_by(code=code).first()
+                    if not existing:
+                        break
+                else:
+                    flash('卡密生成失败，请重试', 'danger')
+                    return redirect(url_for('payment_bp.admin_cards'))
+
+                card = RechargeCard(
+                    code=code,
+                    points=points,
+                    expires_at=expires_at
+                )
+                db.session.add(card)
+                generated.append(code)
+
+            try:
+                db.session.commit()
+                flash(f'成功生成 {len(generated)} 张卡密', 'success')
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error(f"Card generation failed: {e}")
+                flash('生成卡密时发生数据库错误', 'danger')
+
+            return redirect(url_for('payment_bp.admin_cards'))
+
+        elif action == 'delete':
+            card_id = request.form.get('card_id')
+            if card_id:
+                card = RechargeCard.query.get(card_id)
+                if card:
+                    db.session.delete(card)
+                    db.session.commit()
+                    flash('卡密已删除', 'success')
+                else:
+                    flash('卡密不存在', 'warning')
+            return redirect(url_for('payment_bp.admin_cards'))
+
+    status_filter = request.args.get('status', 'ALL')
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    query = RechargeCard.query.outerjoin(User, RechargeCard.used_by == User.id).order_by(RechargeCard.created_at.desc())
+
+    if status_filter == 'unused':
+        query = query.filter(RechargeCard.is_used == False)
+    elif status_filter == 'used':
+        query = query.filter(RechargeCard.is_used == True)
+
+    cards_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    return render_template('admin/cards.html', cards_pagination=cards_pagination, selected_status=status_filter, now=datetime.utcnow())
+
+@payment_bp.route('/admin/cards/export')
+@admin_required
+def admin_cards_export():
+    """Export unused cards as CSV."""
+    import csv
+    import io
+
+    status = request.args.get('status', 'unused')
+    query = RechargeCard.query.order_by(RechargeCard.created_at.desc())
+    if status == 'unused':
+        query = query.filter_by(is_used=False)
+    elif status == 'used':
+        query = query.filter_by(is_used=True)
+
+    cards = query.all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['卡密', '积分', '状态', '创建时间', '过期时间'])
+    for card in cards:
+        writer.writerow([
+            card.code,
+            card.points,
+            '已使用' if card.is_used else '未使用',
+            card.created_at.strftime('%Y-%m-%d %H:%M:%S') if card.created_at else '',
+            card.expires_at.strftime('%Y-%m-%d %H:%M:%S') if card.expires_at else '永不过期'
+        ])
+
+    output.seek(0)
+    from flask import Response
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename=recharge_cards_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        }
+    )
 
 
 @payment_bp.route('/admin/feedback')
