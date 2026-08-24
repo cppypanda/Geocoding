@@ -1,6 +1,7 @@
 import json
 import re
 import asyncio
+import time
 import aiohttp
 import requests # For synchronous HTTP requests in Baidu/Tianditu POI searches
 from abc import ABC, abstractmethod
@@ -9,6 +10,18 @@ from flask import current_app
 from ..utils import geo_transforms
 from ..utils.api_managers import APIKeyManager, baidu_limiter
 from ..utils.address_processing import extract_province_city, calculate_unified_confidence
+
+
+class TiandituDiagnosticError(Exception):
+    """A sanitized Tianditu failure that is safe to write to application logs."""
+
+    def __init__(self, error_code, **details):
+        super().__init__(error_code)
+        self.error_code = error_code
+        self.details = {
+            key: value for key, value in details.items()
+            if value is not None and value != ''
+        }
 
 # --- Base Class for Searchers ---
 
@@ -243,14 +256,41 @@ class TiandituSearcher(BaseSearcher):
 
     async def search(self, keyword: str):
         loop = asyncio.get_event_loop()
+        started_at = time.perf_counter()
         try:
             flask_app = current_app._get_current_object()
             pois = await loop.run_in_executor(None, lambda: self._sync_search_with_context(flask_app, keyword))
             return {'pois': pois}
-        except Exception:
-            # requests exceptions include the full URL, which contains the API key.
-            current_app.logger.warning("天地图 POI 搜索请求失败")
-            return {'error': "Tianditu POI search request failed"}
+        except TiandituDiagnosticError as exc:
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+            details = '; '.join(
+                f'{key}={value}' for key, value in sorted(exc.details.items())
+            )
+            detail_suffix = f'; {details}' if details else ''
+            current_app.logger.error(
+                "[TDT_POI][%s] 天地图 POI 请求失败; elapsed_ms=%04d%s",
+                exc.error_code,
+                elapsed_ms,
+                detail_suffix,
+            )
+            return {
+                'error': "Tianditu POI search request failed",
+                'error_code': exc.error_code,
+            }
+        except Exception as exc:
+            # Never log the exception text here. requests exceptions can contain
+            # the complete URL, including the `tk` API key.
+            elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+            current_app.logger.error(
+                "[TDT_POI][TDT_INTERNAL_ERROR] 天地图 POI 发生未知异常; "
+                "elapsed_ms=%04d; exception_type=%s",
+                elapsed_ms,
+                type(exc).__name__,
+            )
+            return {
+                'error': "Tianditu POI search request failed",
+                'error_code': 'TDT_INTERNAL_ERROR',
+            }
 
     def _sync_search_with_context(self, app, keyword):
         with app.app_context():
@@ -309,13 +349,49 @@ class TiandituSearcher(BaseSearcher):
 
         current_app.logger.debug("调用天地图 POI 搜索，关键词长度=%s", len(keyword))
         
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code != 200:
-            current_app.logger.warning("天地图 POI 请求返回 HTTP %s", response.status_code)
-            response.raise_for_status()
+        try:
+            response = requests.get(url, params=params, timeout=10)
+        except requests.Timeout as exc:
+            raise TiandituDiagnosticError(
+                'TDT_TIMEOUT',
+                exception_type=type(exc).__name__,
+            ) from None
+        except requests.RequestException as exc:
+            raise TiandituDiagnosticError(
+                'TDT_NETWORK_ERROR',
+                exception_type=type(exc).__name__,
+            ) from None
 
-        data = response.json()
+        if response.status_code != 200:
+            raise TiandituDiagnosticError(
+                'TDT_HTTP_ERROR',
+                http_status=response.status_code,
+                content_type=response.headers.get('Content-Type', '').split(';', 1)[0],
+            )
+
+        try:
+            data = response.json()
+        except (ValueError, requests.exceptions.InvalidJSONError):
+            raise TiandituDiagnosticError(
+                'TDT_INVALID_JSON',
+                http_status=response.status_code,
+                content_type=response.headers.get('Content-Type', '').split(';', 1)[0],
+            ) from None
+
+        if not isinstance(data, dict):
+            raise TiandituDiagnosticError(
+                'TDT_INVALID_PAYLOAD',
+                payload_type=type(data).__name__,
+            )
+
+        provider_status = data.get('status')
+        if isinstance(provider_status, dict):
+            provider_code = str(provider_status.get('infocode') or '')
+            if provider_code and provider_code != '1000':
+                raise TiandituDiagnosticError(
+                    'TDT_API_ERROR',
+                    provider_code=provider_code[:32],
+                )
         
         # 根据天地图官方文档解析响应
         result_type = data.get("resultType")
