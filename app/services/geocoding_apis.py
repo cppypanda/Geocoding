@@ -341,6 +341,91 @@ class TiandituGeocoder(BaseGeocoder):
         self.key_manager = APIKeyManager('tianditu', default_key=key)
         self.user_id = user_id
         self.geocode_url = "https://api.tianditu.gov.cn/geocoder"
+        self.tianditu_proxy_url = current_app.config.get('TIANDITU_PROXY_URL')
+        self.tianditu_proxy_token = current_app.config.get('TIANDITU_PROXY_TOKEN')
+
+    async def _make_tianditu_request(self, direct_params, proxy_payload, current_key, service_name):
+        """Use the URPA relay when configured, otherwise call Tianditu directly."""
+        proxy_requested = bool(self.tianditu_proxy_url or self.tianditu_proxy_token)
+        if not proxy_requested:
+            request_params = direct_params.copy()
+            request_params['key'] = current_key
+            return await self._make_request(
+                self.geocode_url,
+                request_params,
+                service_name=service_name,
+            )
+
+        if not (self.tianditu_proxy_url and self.tianditu_proxy_token):
+            current_app.logger.error(
+                "Tianditu geocoding proxy configuration is incomplete; service=%s",
+                service_name,
+            )
+            return {
+                'error': 'Tianditu proxy configuration is incomplete.',
+                'error_code': 'TDT_PROXY_CONFIG_ERROR',
+            }
+
+        await self.rate_limiter.acquire()
+        try:
+            timeout = aiohttp.ClientTimeout(total=20)
+            headers = {
+                'Authorization': f'Bearer {self.tianditu_proxy_token}',
+                'Accept': 'application/json',
+            }
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    self.tianditu_proxy_url,
+                    json=proxy_payload,
+                    headers=headers,
+                ) as response:
+                    if response.status != 200:
+                        upstream_status = None
+                        try:
+                            error_payload = await response.json(content_type=None)
+                            if isinstance(error_payload, dict) and isinstance(
+                                error_payload.get('upstream_status'), int
+                            ):
+                                upstream_status = error_payload['upstream_status']
+                        except (ValueError, aiohttp.ClientError):
+                            pass
+                        current_app.logger.warning(
+                            "Tianditu geocoding proxy failed; service=%s; "
+                            "proxy_status=%s; upstream_status=%s",
+                            service_name,
+                            response.status,
+                            upstream_status,
+                        )
+                        return {
+                            'error': f'Tianditu proxy request failed with HTTP {response.status}',
+                            'error_code': 'TDT_PROXY_HTTP_ERROR',
+                        }
+
+                    payload = await response.json(content_type=None)
+                    if not isinstance(payload, dict):
+                        return {
+                            'error': 'Tianditu proxy returned an invalid response.',
+                            'error_code': 'TDT_PROXY_INVALID_PAYLOAD',
+                        }
+                    return payload
+        except asyncio.TimeoutError:
+            current_app.logger.warning(
+                "Tianditu geocoding proxy timed out; service=%s",
+                service_name,
+            )
+            return {
+                'error': 'Tianditu proxy request timed out.',
+                'error_code': 'TDT_PROXY_TIMEOUT',
+            }
+        except aiohttp.ClientError:
+            current_app.logger.warning(
+                "Tianditu geocoding proxy network request failed; service=%s",
+                service_name,
+            )
+            return {
+                'error': 'Tianditu proxy network request failed.',
+                'error_code': 'TDT_PROXY_NETWORK_ERROR',
+            }
 
     def _standardize_result(self, data, current_key):
         # For Tianditu geocoding, the location data is inside the 'location' key
@@ -398,11 +483,16 @@ class TiandituGeocoder(BaseGeocoder):
             "type": "geocode",
             "tk": current_key
         }
-        # _make_request需要'key'字段进行Key管理，这里镜像一份
-        request_params = params.copy()
-        request_params['key'] = current_key
-
-        raw_data = await self._make_request(self.geocode_url, request_params, service_name='tianditu_reverse')
+        raw_data = await self._make_tianditu_request(
+            params,
+            {
+                'operation': 'reverse_geocode',
+                'latitude': float(lat_wgs84),
+                'longitude': float(lng_wgs84),
+            },
+            current_key,
+            'tianditu_reverse',
+        )
 
         if 'error' in raw_data:
             return raw_data
@@ -435,11 +525,12 @@ class TiandituGeocoder(BaseGeocoder):
             'ds': json.dumps({"keyWord": address}),
             'tk': current_key
         }
-        # The base _make_request expects 'key' in params for key management.
-        request_params = params.copy()
-        request_params['key'] = current_key
-        
-        raw_data = await self._make_request(self.geocode_url, request_params, service_name='tianditu')
+        raw_data = await self._make_tianditu_request(
+            params,
+            {'operation': 'geocode', 'address': address},
+            current_key,
+            'tianditu',
+        )
 
         if 'error' in raw_data:
             # The error from _make_request is generic, we just pass it on.
