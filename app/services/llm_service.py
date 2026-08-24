@@ -7,7 +7,10 @@ import random
 from datetime import datetime
 from flask import current_app, has_request_context
 from flask_login import current_user
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
+from .. import db
 from ..models import RechargeOrder
 from .web_search_local import search_web
 
@@ -144,11 +147,57 @@ def _resolve_user_id(user_id=None):
     return None
 
 
+def _has_completed_recharge(user_id):
+    # Use an isolated read-only session. The request session must not keep a
+    # database connection checked out while an external model call may run for
+    # tens of seconds.
+    membership_session = sessionmaker(bind=db.engine, expire_on_commit=False)()
+    try:
+        return (
+            membership_session.query(RechargeOrder.id)
+            .filter_by(user_id=user_id, status='COMPLETED')
+            .first()
+            is not None
+        )
+    finally:
+        membership_session.close()
+
+
+def _reset_failed_db_session():
+    """Discard a failed/stale request session so the next query gets a new connection."""
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    try:
+        db.session.remove()
+    except Exception:
+        pass
+
+
 def _is_recharge_member(user_id):
-    """成功充值过至少一笔的用户视为充值会员。"""
+    """成功充值过至少一笔的用户视为充值会员；数据库短暂断线时安全降级。"""
     if not user_id:
         return False
-    return RechargeOrder.query.filter_by(user_id=user_id, status='COMPLETED').first() is not None
+    try:
+        return _has_completed_recharge(user_id)
+    except SQLAlchemyError as exc:
+        current_app.logger.warning(
+            "查询充值会员状态失败，清理数据库会话后重试一次：%s",
+            type(exc).__name__,
+        )
+        _reset_failed_db_session()
+
+    try:
+        return _has_completed_recharge(user_id)
+    except SQLAlchemyError as exc:
+        _reset_failed_db_session()
+        current_app.logger.error(
+            "重试查询充值会员状态仍失败，本次按普通用户模型路由：%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return False
 
 
 def _request_deepseek_completion(api_key, api_base, model, messages, max_tokens=None):
@@ -192,12 +241,15 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
     """按用户等级选择主模型，并在主模型最终失败时切换另一家模型一次。"""
     resolved_user_id = _resolve_user_id(user_id)
     deepseek_key = current_app.config.get('DEEPSEEK_API_KEY')
-    preferred_provider = (
-        'deepseek'
-        if _is_recharge_member(resolved_user_id) and bool(deepseek_key)
-        else 'zhipuai'
-    )
-    provider = _forced_provider or preferred_provider
+    if _forced_provider:
+        # 灾备路由已经明确指定供应商，不应在长耗时模型调用后再次访问数据库。
+        provider = _forced_provider
+    else:
+        provider = (
+            'deepseek'
+            if _is_recharge_member(resolved_user_id) and bool(deepseek_key)
+            else 'zhipuai'
+        )
     use_deepseek = provider == 'deepseek'
     model = (
         current_app.config.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
@@ -306,6 +358,8 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
         }
 
     except Exception as e:
+        if isinstance(e, SQLAlchemyError):
+            _reset_failed_db_session()
         current_app.logger.exception("模型路由发生内部错误")
         return {
             'content': None,

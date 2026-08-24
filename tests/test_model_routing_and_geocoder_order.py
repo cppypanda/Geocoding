@@ -3,6 +3,7 @@ import unittest
 import requests
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.exc import OperationalError
 
 from app import create_app, db
 from app.models import RechargeOrder, User
@@ -114,6 +115,59 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
         self.assertEqual(result['provider'], 'deepseek')
         self.assertEqual(result['fallback_from'], 'zhipuai')
+
+    @patch('app.services.llm_service.random.uniform', return_value=0)
+    @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
+    @patch('app.services.llm_service.requests.post')
+    @patch('app.services.llm_service._is_recharge_member', return_value=False)
+    def test_fallback_does_not_query_membership_again(
+            self, is_member, post, sleep, _uniform):
+        user = self._create_user('single-membership-query@example.test')
+        completion = MagicMock(side_effect=RuntimeError('temporary GLM failure'))
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+        http_response = MagicMock()
+        http_response.json.return_value = {
+            'choices': [{'message': {'content': 'deepseek-fallback-ok'}}]
+        }
+        post.return_value = http_response
+
+        result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id, max_retries=1))
+
+        self.assertIsNone(result['error'])
+        self.assertEqual(result['provider'], 'deepseek')
+        self.assertEqual(is_member.call_count, 1)
+
+    @patch('app.services.llm_service._reset_failed_db_session')
+    @patch('app.services.llm_service._has_completed_recharge')
+    def test_membership_query_recovers_after_stale_database_connection(
+            self, has_completed_recharge, reset_session):
+        stale_connection = OperationalError(
+            'SELECT recharge_orders', {}, Exception('SSL connection has been closed unexpectedly')
+        )
+        has_completed_recharge.side_effect = [stale_connection, False]
+
+        is_member = llm_service._is_recharge_member(123)
+
+        self.assertFalse(is_member)
+        self.assertEqual(has_completed_recharge.call_count, 2)
+        reset_session.assert_called_once_with()
+
+    @patch('app.services.llm_service._reset_failed_db_session')
+    @patch('app.services.llm_service._has_completed_recharge')
+    def test_membership_query_degrades_after_retry_failure(
+            self, has_completed_recharge, reset_session):
+        stale_connection = OperationalError(
+            'SELECT recharge_orders', {}, Exception('SSL connection has been closed unexpectedly')
+        )
+        has_completed_recharge.side_effect = [stale_connection, stale_connection]
+
+        is_member = llm_service._is_recharge_member(123)
+
+        self.assertFalse(is_member)
+        self.assertEqual(has_completed_recharge.call_count, 2)
+        self.assertEqual(reset_session.call_count, 2)
 
     @patch('app.services.llm_service.random.uniform', return_value=0)
     @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
