@@ -252,6 +252,8 @@ class TiandituSearcher(BaseSearcher):
         self.source_name = "tianditu"
         # Get config values during initialization to avoid app context issues
         self.tianditu_key = current_app.config.get('TIANDITU_KEY')
+        self.tianditu_proxy_url = current_app.config.get('TIANDITU_PROXY_URL')
+        self.tianditu_proxy_token = current_app.config.get('TIANDITU_PROXY_TOKEN')
         self.key_manager = APIKeyManager('tianditu', default_key=self.tianditu_key)
 
     async def search(self, keyword: str):
@@ -343,30 +345,79 @@ class TiandituSearcher(BaseSearcher):
             post_data["level"] = "18"
             post_data["mapBound"] = "73,3,136,54" # 中国大致范围 (minX,minY,maxX,maxY)
 
-        # 不使用ensure_ascii=False，保持默认行为；添加 show=2 以返回更详细行政区字段
-        api_key, _key_type = self.key_manager.get_next_key(self.user_id)
-        params = {"postStr": json.dumps(post_data), "type": "query", "tk": api_key, "show": "2"}
-
         current_app.logger.debug("调用天地图 POI 搜索，关键词长度=%s", len(keyword))
-        
+        proxy_requested = bool(self.tianditu_proxy_url or self.tianditu_proxy_token)
+        request_route = 'urpa_proxy' if proxy_requested else 'direct'
+        if proxy_requested and not (
+            self.tianditu_proxy_url and self.tianditu_proxy_token
+        ):
+            raise TiandituDiagnosticError(
+                'TDT_PROXY_CONFIG_ERROR',
+                request_route=request_route,
+            )
+
         try:
-            response = requests.get(url, params=params, timeout=10)
+            if proxy_requested:
+                proxy_body = {'keyword': str(keyword)}
+                if admin_specify:
+                    proxy_body['specify'] = admin_specify
+                response = requests.post(
+                    self.tianditu_proxy_url,
+                    json=proxy_body,
+                    headers={
+                        'Authorization': f'Bearer {self.tianditu_proxy_token}',
+                        'Accept': 'application/json',
+                    },
+                    timeout=20,
+                )
+            else:
+                # 不使用ensure_ascii=False，保持默认行为；添加 show=2 以返回更详细行政区字段
+                api_key, _key_type = self.key_manager.get_next_key(self.user_id)
+                params = {
+                    "postStr": json.dumps(post_data),
+                    "type": "query",
+                    "tk": api_key,
+                    "show": "2",
+                }
+                response = requests.get(url, params=params, timeout=10)
         except requests.Timeout as exc:
             raise TiandituDiagnosticError(
                 'TDT_TIMEOUT',
                 exception_type=type(exc).__name__,
+                request_route=request_route,
             ) from None
         except requests.RequestException as exc:
             raise TiandituDiagnosticError(
                 'TDT_NETWORK_ERROR',
                 exception_type=type(exc).__name__,
+                request_route=request_route,
             ) from None
 
         if response.status_code != 200:
+            if proxy_requested:
+                proxy_details = {}
+                try:
+                    proxy_payload = response.json()
+                    if isinstance(proxy_payload, dict):
+                        proxy_error = str(proxy_payload.get('error') or '')
+                        if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', proxy_error):
+                            proxy_details['proxy_error'] = proxy_error
+                        upstream_status = proxy_payload.get('upstream_status')
+                        if isinstance(upstream_status, int):
+                            proxy_details['upstream_status'] = upstream_status
+                except ValueError:
+                    pass
+                raise TiandituDiagnosticError(
+                    'TDT_PROXY_HTTP_ERROR',
+                    proxy_status=response.status_code,
+                    request_route=request_route,
+                    **proxy_details,
+                )
             raise TiandituDiagnosticError(
                 'TDT_HTTP_ERROR',
                 http_status=response.status_code,
                 content_type=response.headers.get('Content-Type', '').split(';', 1)[0],
+                request_route=request_route,
             )
 
         try:
@@ -376,6 +427,7 @@ class TiandituSearcher(BaseSearcher):
                 'TDT_INVALID_JSON',
                 http_status=response.status_code,
                 content_type=response.headers.get('Content-Type', '').split(';', 1)[0],
+                request_route=request_route,
             ) from None
 
         if not isinstance(data, dict):

@@ -23,6 +23,8 @@ class TiandituMonitoringTests(unittest.TestCase):
             'WTF_CSRF_ENABLED': False,
             'ZHIPUAI_KEY': None,
             'TIANDITU_KEY': self.SECRET_KEY_VALUE,
+            'TIANDITU_PROXY_URL': None,
+            'TIANDITU_PROXY_TOKEN': None,
             'ERROR_CENTER_ENABLED': True,
         })
         self.context = self.app.app_context()
@@ -125,6 +127,63 @@ class TiandituMonitoringTests(unittest.TestCase):
 
         self.assertEqual(result, {'pois': []})
         self.assertEqual(ErrorRecord.query.count(), 0)
+
+    def test_urpa_proxy_is_used_without_exposing_either_key(self):
+        proxy_token = 'proxy-secret-must-not-appear'
+        self.app.config.update({
+            'TIANDITU_PROXY_URL': 'https://urpa.example.test/api/tianditu',
+            'TIANDITU_PROXY_TOKEN': proxy_token,
+        })
+        response = Mock(
+            status_code=200,
+            headers={'Content-Type': 'application/json'},
+            content=b'{}',
+        )
+        response.json.return_value = {
+            'status': {'infocode': 1000},
+            'resultType': 1,
+            'count': 0,
+            'pois': [],
+        }
+
+        with patch('app.services.poi_search.requests.post', return_value=response) as post:
+            result = asyncio.run(TiandituSearcher().search('北京市北京大学'))
+
+        self.assertEqual(result, {'pois': []})
+        request_kwargs = post.call_args.kwargs
+        self.assertEqual(request_kwargs['json']['keyword'], '北京市北京大学')
+        self.assertEqual(
+            request_kwargs['headers']['Authorization'],
+            f'Bearer {proxy_token}',
+        )
+        self.assertNotIn(self.SECRET_KEY_VALUE, str(post.call_args))
+        self.assertEqual(ErrorRecord.query.count(), 0)
+
+    def test_urpa_proxy_error_preserves_safe_upstream_status(self):
+        proxy_token = 'proxy-secret-must-not-appear'
+        self.app.config.update({
+            'TIANDITU_PROXY_URL': 'https://urpa.example.test/api/tianditu',
+            'TIANDITU_PROXY_TOKEN': proxy_token,
+        })
+        response = Mock(
+            status_code=502,
+            headers={'Content-Type': 'application/json'},
+            content=b'{}',
+        )
+        response.json.return_value = {
+            'error': 'TiandituUpstreamHttpError',
+            'upstream_status': 418,
+        }
+
+        with patch('app.services.poi_search.requests.post', return_value=response):
+            result = asyncio.run(TiandituSearcher().search('测试地址'))
+
+        self.assertEqual(result['error_code'], 'TDT_PROXY_HTTP_ERROR')
+        record = self._assert_recorded('TDT_PROXY_HTTP_ERROR')
+        self.assertIn('proxy_status=502', record.message)
+        self.assertIn('upstream_status=418', record.message)
+        self.assertIn('request_route=urpa_proxy', record.message)
+        self.assertNotIn(proxy_token, record.message)
 
 
 if __name__ == '__main__':

@@ -39,6 +39,8 @@ class Config:
     AMAP_KEY = os.environ.get('AMAP_KEY')
     BAIDU_KEY = os.environ.get('BAIDU_KEY')
     TIANDITU_KEY = os.environ.get('TIANDITU_KEY')
+    TIANDITU_PROXY_URL = os.environ.get('TIANDITU_PROXY_URL')
+    TIANDITU_PROXY_TOKEN = os.environ.get('TIANDITU_PROXY_TOKEN')
     ZHIPUAI_KEY = os.environ.get('ZHIPUAI_KEY')
     ZHIPUAI_MODEL = os.environ.get('ZHIPUAI_MODEL', 'glm-4.7-flash')
     DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY')
