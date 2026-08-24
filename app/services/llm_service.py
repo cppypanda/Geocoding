@@ -5,7 +5,7 @@ import traceback
 import requests
 import random
 from datetime import datetime
-from flask import current_app, has_request_context
+from flask import current_app, has_request_context, request
 from flask_login import current_user
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +13,96 @@ from sqlalchemy.orm import sessionmaker
 from .. import db
 from ..models import RechargeOrder
 from .web_search_local import search_web
+
+
+def _safe_diagnostic_value(value, limit=128):
+    """Return a short identifier safe for logs and the error center."""
+    if value is None:
+        return None
+    text = str(value).strip()[:limit]
+    if not text:
+        return None
+    return re.sub(r'[^A-Za-z0-9._:/-]', '?', text)
+
+
+def _model_error_diagnostics(exc):
+    """Extract only allow-listed provider metadata; never retain raw bodies."""
+    response = getattr(exc, 'response', None)
+    status_code = getattr(exc, 'status_code', None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, 'status_code', None)
+
+    body = getattr(exc, 'body', None)
+    if not isinstance(body, dict) and response is not None:
+        try:
+            candidate = response.json()
+            body = candidate if isinstance(candidate, dict) else None
+        except Exception:
+            body = None
+    error_body = body.get('error') if isinstance(body, dict) else None
+    if not isinstance(error_body, dict):
+        error_body = {}
+
+    provider_code = (
+        getattr(exc, 'code', None)
+        or getattr(exc, 'error_code', None)
+        or error_body.get('code')
+        or (body.get('code') if isinstance(body, dict) else None)
+    )
+    provider_request_id = (
+        getattr(exc, 'request_id', None)
+        or getattr(exc, 'x_request_id', None)
+    )
+    if not provider_request_id and response is not None:
+        headers = getattr(response, 'headers', None) or {}
+        for header_name in (
+            'x-request-id', 'x-requestid', 'request-id', 'x-log-id',
+            'x-bce-request-id',
+        ):
+            try:
+                provider_request_id = headers.get(header_name)
+            except Exception:
+                provider_request_id = None
+            if provider_request_id:
+                break
+
+    application_request_id = None
+    if has_request_context():
+        application_request_id = request.headers.get('X-Request-ID')
+
+    return {
+        'http_status': _safe_diagnostic_value(status_code, 16) or 'unknown',
+        'provider_code': _safe_diagnostic_value(provider_code) or 'unknown',
+        'request_id': _safe_diagnostic_value(application_request_id) or 'none',
+        'provider_request_id': _safe_diagnostic_value(provider_request_id) or 'none',
+    }
+
+
+def _record_model_provider_failure(provider, model, attempt, attempts, exc):
+    diagnostics = _model_error_diagnostics(exc)
+    exception_type = type(exc).__name__
+    safe_provider = _safe_diagnostic_value(provider, 32) or 'unknown'
+    safe_model = _safe_diagnostic_value(model, 128) or 'unknown'
+    safe_message = (
+        'MODEL_PROVIDER_FAILURE '
+        f'provider={safe_provider} model={safe_model} attempt={attempt}/{attempts} '
+        f'exception_type={exception_type} http_status={diagnostics["http_status"]} '
+        f'provider_code={diagnostics["provider_code"]} '
+        f'request_id={diagnostics["request_id"]} '
+        f'provider_request_id={diagnostics["provider_request_id"]}'
+    )
+    current_app.logger.warning(safe_message)
+
+    # A fallback can recover this request, so persist the sanitized provider
+    # failure explicitly instead of relying on the ERROR-level log handler.
+    from .error_center import capture_error
+    capture_error(
+        safe_message,
+        exception_type=exception_type,
+        severity='warning',
+        source=f'model_provider:{safe_provider}',
+    )
+    return diagnostics
 
 SMART_SEARCH_PROMPT = '''请分析以下搜索关键词，并以JSON格式返回相关的地理位置信息：
 {query}
@@ -313,9 +403,8 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
             except Exception as e:
                 last_error = e
                 llm_res_ts = datetime.now().isoformat()
-                current_app.logger.warning(
-                    "%s 模型调用失败（第 %s/%s 次）：%s",
-                    provider, attempt + 1, attempts, type(e).__name__
+                _record_model_provider_failure(
+                    provider, model, attempt + 1, attempts, e
                 )
                 if _is_non_retryable_model_error(e):
                     current_app.logger.error(
@@ -608,9 +697,23 @@ async def select_best_poi_from_search(original_address: str, poi_results: list, 
 
     # 调用 LLM
     llm_response = await call_llm_api(system_prompt + "\n\n" + user_prompt, user_id=user_id)
-    current_app.logger.info(f"LLM 原始响应: {llm_response.get('content')}") # 增加原始响应日志
+    current_app.logger.info(
+        'LLM响应已收到 provider=%s model=%s fallback_from=%s content_length=%s',
+        llm_response.get('provider'),
+        llm_response.get('model'),
+        llm_response.get('fallback_from'),
+        len(llm_response.get('content') or ''),
+    )
+    model_metadata = {
+        '_model_provider': llm_response.get('provider'),
+        '_model_name': llm_response.get('model'),
+        '_fallback_from': llm_response.get('fallback_from'),
+    }
     if llm_response.get('error') or not llm_response.get('content'):
-        return {'error': f"LLM API调用失败: {llm_response.get('error', '无有效内容返回')}"}
+        return {
+            'error': f"LLM API调用失败: {llm_response.get('error', '无有效内容返回')}",
+            **model_metadata,
+        }
 
     # 解析响应（兼容新老两种格式）
     try:
@@ -632,10 +735,11 @@ async def select_best_poi_from_search(original_address: str, poi_results: list, 
                 selected_tmp['llm_reason'] = (reasons[0] if reasons else '高置信度代表点')
                 selected_tmp['llm_confidence'] = confidence
                 selected_tmp['selected_index'] = index
+                selected_tmp.update(model_metadata)
                 return selected_tmp
             
             # 否则，视为低置信度或弃权
-            return {'error': 'NO_HIGH_CONFIDENCE', 'reasons': reasons}
+            return {'error': 'NO_HIGH_CONFIDENCE', 'reasons': reasons, **model_metadata}
 
         # 兼容旧模板
         best_index = data.get('best_match_index')
@@ -645,13 +749,20 @@ async def select_best_poi_from_search(original_address: str, poi_results: list, 
             selected_poi_temp['llm_reason'] = data.get('reason', '')
             selected_poi_temp['llm_confidence'] = conf
             selected_poi_temp['selected_index'] = best_index
+            selected_poi_temp.update(model_metadata)
             return selected_poi_temp
 
-        return {'error': 'NO_HIGH_CONFIDENCE'}
+        return {'error': 'NO_HIGH_CONFIDENCE', **model_metadata}
 
     except Exception as e:
-        current_app.logger.error(f"解析/处理LLM响应失败: {e}\n原始响应: {llm_response.get('content')}")
-        return {'error': '解析LLM响应失败，格式不正确。'}
+        current_app.logger.error(
+            '解析/处理LLM响应失败 exception_type=%s provider=%s model=%s content_length=%s',
+            type(e).__name__,
+            llm_response.get('provider'),
+            llm_response.get('model'),
+            len(llm_response.get('content') or ''),
+        )
+        return {'error': '解析LLM响应失败，格式不正确。', **model_metadata}
 
 
 async def validate_poi_with_dossier(original_address: str, poi_candidates: list, dossier: dict,

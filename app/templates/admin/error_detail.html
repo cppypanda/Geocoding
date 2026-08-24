@@ -14,6 +14,8 @@
         {% elif error.status == 'in_progress' %}<span class="badge bg-warning text-dark fs-6">处理中</span>
         {% elif error.status == 'resolved' %}<span class="badge bg-success fs-6">已解决</span>
         {% else %}<span class="badge bg-secondary fs-6">已忽略</span>{% endif %}
+        {% if error.severity == 'critical' %}<span class="badge bg-dark fs-6">严重</span>
+        {% elif error.severity == 'warning' %}<span class="badge bg-warning text-dark fs-6">警告</span>{% endif %}
     </div>
 </div>
 

@@ -1025,9 +1025,12 @@ async def auto_select_point_route():
             source_context=source_context
         )
         current_app.logger.info(
-            '[AUTO_SELECT][MODEL_DONE] request_id=%s elapsed_ms=%s outcome=%s',
+            '[AUTO_SELECT][MODEL_DONE] request_id=%s elapsed_ms=%s outcome=%s provider=%s model=%s fallback_from=%s',
             request_id, elapsed_ms(),
-            'selected' if selected_poi and 'error' not in selected_poi else 'abstained_or_failed'
+            'selected' if selected_poi and 'error' not in selected_poi else 'abstained_or_failed',
+            selected_poi.get('_model_provider') if selected_poi else None,
+            selected_poi.get('_model_name') if selected_poi else None,
+            selected_poi.get('_fallback_from') if selected_poi else None,
         )
 
         if selected_poi and 'error' not in selected_poi:

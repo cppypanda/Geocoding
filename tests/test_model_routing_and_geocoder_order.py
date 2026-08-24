@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import OperationalError
 
 from app import create_app, db
-from app.models import RechargeOrder, User
+from app.models import ErrorRecord, RechargeOrder, User
 from app.routes import geocoding
 from app.services import llm_service
 
@@ -117,6 +117,63 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
         self.assertEqual(result['provider'], 'deepseek')
         self.assertEqual(result['fallback_from'], 'zhipuai')
+
+    @patch('app.services.llm_service.requests.post')
+    def test_provider_failure_records_only_safe_diagnostics(self, post):
+        user = self._create_user('provider-diagnostics@example.test')
+        provider_error = RuntimeError('raw provider body with secret-token-value')
+        provider_error.status_code = 429
+        provider_error.code = '1302'
+        provider_error.request_id = 'vendor-request-abc123'
+        completion = MagicMock(side_effect=provider_error)
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+        http_response = MagicMock()
+        http_response.json.return_value = {
+            'choices': [{'message': {'content': 'deepseek-fallback-ok'}}]
+        }
+        post.return_value = http_response
+
+        with self.app.test_request_context(
+            '/geocode/auto_select_point',
+            method='POST',
+            headers={'X-Request-ID': 'web-request-xyz789'},
+            json={'original_address': '测试地址'},
+        ):
+            result = asyncio.run(llm_service.call_llm_api(
+                'prompt-must-not-be-recorded', user_id=user.id
+            ))
+
+        self.assertIsNone(result['error'])
+        record = ErrorRecord.query.filter_by(source='model_provider:zhipuai').one()
+        self.assertEqual(record.exception_type, 'RuntimeError')
+        self.assertEqual(record.severity, 'warning')
+        self.assertIn('http_status=429', record.message)
+        self.assertIn('provider_code=1302', record.message)
+        self.assertIn('request_id=web-request-xyz789', record.message)
+        self.assertIn('provider_request_id=vendor-request-abc123', record.message)
+        self.assertNotIn('secret-token-value', record.message)
+        self.assertNotIn('prompt-must-not-be-recorded', record.message)
+
+    def test_deepseek_http_error_extracts_code_and_response_request_id(self):
+        response = MagicMock()
+        response.status_code = 429
+        response.headers = {'x-request-id': 'deepseek-request-456'}
+        response.json.return_value = {
+            'error': {
+                'code': 'rate_limit_exceeded',
+                'message': 'raw response must not be retained',
+            }
+        }
+        error = requests.HTTPError('raw HTTP response', response=response)
+
+        diagnostics = llm_service._model_error_diagnostics(error)
+
+        self.assertEqual(diagnostics['http_status'], '429')
+        self.assertEqual(diagnostics['provider_code'], 'rate_limit_exceeded')
+        self.assertEqual(diagnostics['provider_request_id'], 'deepseek-request-456')
+        self.assertNotIn('raw response', str(diagnostics))
 
     @patch('app.services.llm_service.random.uniform', return_value=0)
     @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)

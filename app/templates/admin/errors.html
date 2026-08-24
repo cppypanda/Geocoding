@@ -52,6 +52,7 @@
                 <option value="" {{ 'selected' if not severity_filter else '' }}>全部级别</option>
                 <option value="critical" {{ 'selected' if severity_filter == 'critical' else '' }}>严重</option>
                 <option value="error" {{ 'selected' if severity_filter == 'error' else '' }}>错误</option>
+                <option value="warning" {{ 'selected' if severity_filter == 'warning' else '' }}>警告</option>
             </select>
         </div>
         <div class="col-md-5">
@@ -85,7 +86,8 @@
                         {% elif item.status == 'in_progress' %}<span class="badge bg-warning text-dark">处理中</span>
                         {% elif item.status == 'resolved' %}<span class="badge bg-success">已解决</span>
                         {% else %}<span class="badge bg-secondary">已忽略</span>{% endif %}
-                        {% if item.severity == 'critical' %}<span class="badge bg-dark">严重</span>{% endif %}
+                        {% if item.severity == 'critical' %}<span class="badge bg-dark">严重</span>
+                        {% elif item.severity == 'warning' %}<span class="badge bg-warning text-dark">警告</span>{% endif %}
                     </td>
                     <td style="min-width: 300px; max-width: 560px;">
                         <div class="fw-semibold text-break">{{ item.exception_type }}</div>

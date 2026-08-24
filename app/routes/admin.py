@@ -156,7 +156,7 @@ def error_center():
     query = ErrorRecord.query
     if status_filter in {'open', 'in_progress', 'resolved', 'ignored'}:
         query = query.filter(ErrorRecord.status == status_filter)
-    if severity_filter in {'error', 'critical'}:
+    if severity_filter in {'warning', 'error', 'critical'}:
         query = query.filter(ErrorRecord.severity == severity_filter)
     if keyword:
         pattern = f'%{keyword}%'
