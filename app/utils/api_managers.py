@@ -116,6 +116,6 @@ class APIRateLimiter:
             await asyncio.sleep(wait_time)
 
 # Global limiter instances
-baidu_limiter = APIRateLimiter(1)
+baidu_limiter = APIRateLimiter(3)
 tianditu_limiter = APIRateLimiter(1)
 amap_limiter = APIRateLimiter(3)
