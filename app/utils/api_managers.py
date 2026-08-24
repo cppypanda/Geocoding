@@ -1,5 +1,4 @@
 import time
-from collections import deque
 import os
 import asyncio
 import random
@@ -105,20 +104,18 @@ class APIKeyManager:
 class APIRateLimiter:
     def __init__(self, qps=3):
         self.qps = qps
-        self.requests = deque()
+        self.next_request_at = 0.0
         
     async def acquire(self):
-        now = time.time()
-        
-        while self.requests and self.requests[0] < now - 1:
-            self.requests.popleft()
-            
-        if len(self.requests) >= self.qps:
-            wait_time = 1 - (now - self.requests[0])
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-                
-        self.requests.append(time.time())
+        """Reserve a uniformly spaced request slot without releasing waiters in a burst."""
+        now = time.monotonic()
+        scheduled_at = max(now, self.next_request_at)
+        self.next_request_at = scheduled_at + (1.0 / self.qps)
+        wait_time = scheduled_at - now
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
 # Global limiter instances
-baidu_limiter = APIRateLimiter(30)
+baidu_limiter = APIRateLimiter(1)
+tianditu_limiter = APIRateLimiter(1)
+amap_limiter = APIRateLimiter(3)

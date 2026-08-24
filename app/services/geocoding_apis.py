@@ -5,7 +5,7 @@ import abc
 
 from flask import current_app
 from ..utils import geo_transforms, address_processing
-from ..utils.api_managers import baidu_limiter, APIKeyManager, APIRateLimiter, REASON_INVALID, REASON_QUOTA_EXCEEDED, REASON_RATE_LIMITED, REASON_OTHER
+from ..utils.api_managers import amap_limiter, baidu_limiter, tianditu_limiter, APIKeyManager, APIRateLimiter, REASON_INVALID, REASON_QUOTA_EXCEEDED, REASON_RATE_LIMITED, REASON_OTHER
 from ..exceptions import RateLimitError, ThirdPartyAPIError, InvalidApiKeyError
 
 # --- Refactored Geocoder Service Structure ---
@@ -70,7 +70,7 @@ class AmapGeocoder(BaseGeocoder):
     """Geocoder for Amap (Gaode)."""
     
     def __init__(self, key, user_id=None):
-        super().__init__(APIRateLimiter(3))
+        super().__init__(amap_limiter)
         self.key_manager = APIKeyManager('amap', default_key=key)
         self.user_id = user_id
         self.geocode_url = 'https://restapi.amap.com/v3/geocode/geo'
@@ -251,6 +251,8 @@ class BaiduGeocoder(BaseGeocoder):
         status_code = data.get('status')
         if status_code in [302, 301]: # Quota exceeded
             self.key_manager.report_failure(current_key, REASON_QUOTA_EXCEEDED)
+        elif status_code == 401 and ('并发' in error_msg or '限制访问' in error_msg):
+            self.key_manager.report_failure(current_key, REASON_RATE_LIMITED)
         elif status_code in [401, 402]: # Invalid key
             self.key_manager.report_failure(current_key, REASON_INVALID)
         else:
@@ -301,6 +303,8 @@ class BaiduGeocoder(BaseGeocoder):
         status_code = raw_data.get('status')
         if status_code in [302, 301]: # Quota exceeded
             self.key_manager.report_failure(current_key, REASON_QUOTA_EXCEEDED)
+        elif status_code == 401 and ('并发' in error_msg or '限制访问' in error_msg):
+            self.key_manager.report_failure(current_key, REASON_RATE_LIMITED)
         elif status_code in [401, 402]: # Invalid key
             self.key_manager.report_failure(current_key, REASON_INVALID)
         else:
@@ -337,7 +341,7 @@ class TiandituGeocoder(BaseGeocoder):
     """Geocoder for Tianditu."""
     
     def __init__(self, key, user_id=None):
-        super().__init__(APIRateLimiter(3))
+        super().__init__(tianditu_limiter)
         self.key_manager = APIKeyManager('tianditu', default_key=key)
         self.user_id = user_id
         self.geocode_url = "https://api.tianditu.gov.cn/geocoder"
