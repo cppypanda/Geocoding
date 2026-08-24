@@ -3,6 +3,7 @@ import re
 import json
 import time
 import os
+import uuid
 from datetime import datetime
 import jionlp as jio
 from sqlalchemy import func, update
@@ -976,10 +977,24 @@ async def auto_select_point_route():
     接收一个原始地址和一个POI列表，使用LLM来决策最佳匹配项。
     """
     charged_points = 0
+    request_id = (request.headers.get('X-Request-ID') or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9._-]{8,128}', request_id):
+        request_id = str(uuid.uuid4())
+    started_at = time.monotonic()
+    stage = 'validate_request'
+
+    def elapsed_ms():
+        return round((time.monotonic() - started_at) * 1000)
+
+    def json_response(payload, status=200):
+        response = jsonify(payload)
+        response.headers['X-Request-ID'] = request_id
+        return response, status
+
     try:
         data = request.get_json()
         if not data:
-            return jsonify({'success': False, 'message': '无效的请求数据'}), 400
+            return json_response({'success': False, 'message': '无效的请求数据', 'request_id': request_id}, 400)
 
         # 兼容两种键名：优先使用规范的 'pois'，兼容历史前端 'poi_results'
         pois = data.get('pois') or data.get('poi_results')
@@ -988,8 +1003,9 @@ async def auto_select_point_route():
         user_id = current_user.id
 
         if not pois or not original_address:
-            return jsonify({'success': False, 'message': '缺少POI列表或原始地址'}), 400
+            return json_response({'success': False, 'message': '缺少POI列表或原始地址', 'request_id': request_id}, 400)
 
+        stage = 'charge_points'
         charged_points, error_response, error_status = _charge_points_or_402(
             'llm_call', user_id
         )
@@ -997,14 +1013,22 @@ async def auto_select_point_route():
             return error_response, error_status
 
         # 调用LLM服务进行决策
-        current_app.logger.info(f"开始LLM智能选点：原始地址='{original_address}', POI数量={len(pois)}, 来源上下文='{source_context}'")
+        current_app.logger.info(
+            '[AUTO_SELECT][START] request_id=%s user_id=%s poi_count=%s source=%s',
+            request_id, user_id, len(pois), str(source_context)[:80]
+        )
+        stage = 'model_selection'
         selected_poi = await llm_service.select_best_poi_from_search(
             original_address=original_address,
             poi_results=pois,
             user_id=user_id,
             source_context=source_context
         )
-        current_app.logger.info(f"LLM选点结果：{json.dumps(selected_poi, ensure_ascii=False)}")
+        current_app.logger.info(
+            '[AUTO_SELECT][MODEL_DONE] request_id=%s elapsed_ms=%s outcome=%s',
+            request_id, elapsed_ms(),
+            'selected' if selected_poi and 'error' not in selected_poi else 'abstained_or_failed'
+        )
 
         if selected_poi and 'error' not in selected_poi:
             # 使用LLM返回的索引信息
@@ -1022,23 +1046,35 @@ async def auto_select_point_route():
                         response_data['user'] = {
                             'points': updated_user.points
                         }
-                return jsonify(response_data)
+                response_data['request_id'] = request_id
+                current_app.logger.info(
+                    '[AUTO_SELECT][SUCCESS] request_id=%s elapsed_ms=%s selected_index=%s',
+                    request_id, elapsed_ms(), index
+                )
+                return json_response(response_data)
             else:
                 refund_points(user_id, charged_points)
-                return jsonify({'success': False, 'message': 'LLM未返回有效的索引信息'})
+                return json_response({'success': False, 'message': 'LLM未返回有效的索引信息', 'request_id': request_id})
         elif selected_poi and 'error' in selected_poi:
             # 如果LLM服务返回了一个特定的错误信息
             refund_points(user_id, charged_points)
-            return jsonify({'success': False, 'message': selected_poi['error']})
+            return json_response({'success': False, 'message': selected_poi['error'], 'request_id': request_id})
         else:
             # 如果没有选出任何点
             refund_points(user_id, charged_points)
-            return jsonify({'success': False, 'message': '未能决策出最佳匹配点'})
+            return json_response({'success': False, 'message': '未能决策出最佳匹配点', 'request_id': request_id})
 
     except Exception as e:
         refund_points(current_user.id, charged_points)
-        current_app.logger.error(f"路由 /auto_select_point 发生异常: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': '服务器内部错误'}), 500
+        current_app.logger.error(
+            '[AUTO_SELECT][FAILED] request_id=%s stage=%s elapsed_ms=%s exception_type=%s',
+            request_id, stage, elapsed_ms(), type(e).__name__, exc_info=True
+        )
+        return json_response({
+            'success': False,
+            'message': '服务器内部错误',
+            'request_id': request_id,
+        }, 500)
 
 @geocoding_bp.route('/reverse_geocode', methods=['POST'])
 @login_required

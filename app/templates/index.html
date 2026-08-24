@@ -1143,7 +1143,7 @@
         // 将积分奖励配置注入到前端全局，供JS模块使用
         window.__POINTS_AWARD_BY_SERVICE__ = JSON.parse('{{ points_award_by_service | tojson | safe }}');
     </script>
-    <script src="{{ url_for('static', filename='js/error-reporter.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.3" type="module"></script>
+    <script src="{{ url_for('static', filename='js/error-reporter.js') }}?v=1.0.4"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.4" type="module"></script>
 </body>
 </html>

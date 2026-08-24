@@ -21,7 +21,7 @@
         const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
         if (!csrfToken) return;
 
-        fetch('/api/client-errors', {
+        const requestOptions = {
             method: 'POST',
             credentials: 'same-origin',
             keepalive: true,
@@ -30,10 +30,32 @@
                 'X-CSRFToken': csrfToken
             },
             body: JSON.stringify(payload)
-        }).catch(function () {
-            // Never report an error caused by the reporter itself.
+        };
+        fetch('/api/client-errors', requestOptions).catch(function () {
+            // A worker restart can briefly reject both the original request and
+            // this report. Retry once after the service has had time to recover.
+            window.setTimeout(function () {
+                fetch('/api/client-errors', requestOptions).catch(function () {
+                    // Never report an error caused by the reporter itself.
+                });
+            }, 1500);
         });
     }
+
+    // Allow application code to report errors that it intentionally catches.
+    // Without this hook, fetch failures handled by the UI never reach the
+    // administration error center.
+    window.reportClientError = function (payload) {
+        if (!payload || typeof payload !== 'object') return;
+        sendError({
+            kind: String(payload.kind || 'caught').slice(0, 64),
+            type: String(payload.type || 'ClientError').slice(0, 255),
+            message: String(payload.message || '浏览器端已捕获错误').slice(0, 4000),
+            stack: String(payload.stack || '').slice(0, 20000),
+            location: String(payload.location || window.location.pathname).split('?', 1)[0].slice(0, 2000),
+            context: payload.context && typeof payload.context === 'object' ? payload.context : undefined
+        });
+    };
 
     window.addEventListener('error', function (event) {
         if (event.error) {

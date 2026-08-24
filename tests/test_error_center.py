@@ -103,6 +103,12 @@ class ErrorCenterTests(unittest.TestCase):
             'message': 'Cannot read properties of undefined',
             'stack': 'TypeError at map-search.js:20:10',
             'location': '/static/js/map-search.js:20:10',
+            'context': {
+                'operation': 'auto_select_point',
+                'request_id': '0d42ba6b-ea0e-487f-b79c-a2af7481de68',
+                'response_received': False,
+                'candidate_count': 3,
+            },
             'token': 'must-not-be-stored',
         })
         self.assertEqual(response.status_code, 204)
@@ -110,6 +116,8 @@ class ErrorCenterTests(unittest.TestCase):
         self.assertEqual(record.exception_type, 'TypeError')
         self.assertEqual(record.source, 'client:promise')
         self.assertIn('map-search.js', record.traceback)
+        self.assertIn('auto_select_point', record.request_payload)
+        self.assertIn('candidate_count', record.request_payload)
         self.assertNotIn('must-not-be-stored', record.request_payload)
 
 

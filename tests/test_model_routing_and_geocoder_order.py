@@ -22,6 +22,7 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
             'DEEPSEEK_API_BASE': 'https://api.deepseek.com',
             'DEEPSEEK_MODEL': 'deepseek-v4-flash',
             'SECRET_KEY': 'model-routing-test',
+            'WTF_CSRF_ENABLED': False,
         })
         self.context = self.app.app_context()
         self.context.push()
@@ -90,6 +91,7 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.assertEqual(result['provider'], 'zhipuai')
         self.assertEqual(result['model'], 'glm-4.7-flash')
         self.assertEqual(completion.call_args.kwargs['model'], 'glm-4.7-flash')
+        self.assertEqual(completion.call_args.kwargs['timeout'], 25)
 
     @patch('app.services.llm_service.random.uniform', return_value=0)
     @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
@@ -226,6 +228,37 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         payload = post.call_args.kwargs['json']
         self.assertEqual(payload['model'], 'deepseek-v4-flash')
         self.assertEqual(payload['thinking'], {'type': 'disabled'})
+        self.assertEqual(post.call_args.kwargs['timeout'], 25)
+
+    def test_auto_select_echoes_browser_request_id(self):
+        user = self._create_user('request-id@example.test')
+        client = self.app.test_client()
+        with client.session_transaction() as session:
+            session['_user_id'] = str(user.id)
+            session['_fresh'] = True
+
+        request_id = 'web-test-request-1234'
+        with (
+            patch.object(geocoding, '_charge_points_or_402', return_value=(2, None, None)),
+            patch.object(
+                geocoding.llm_service,
+                'select_best_poi_from_search',
+                new=AsyncMock(return_value={'selected_index': 0}),
+            ),
+        ):
+            response = client.post(
+                '/geocode/auto_select_point',
+                headers={'X-Request-ID': request_id},
+                json={
+                    'original_address': '测试地址',
+                    'poi_results': [{'name': '测试地点'}],
+                    'source_context': '地图搜索',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['X-Request-ID'], request_id)
+        self.assertEqual(response.get_json()['request_id'], request_id)
 
 
 if __name__ == '__main__':

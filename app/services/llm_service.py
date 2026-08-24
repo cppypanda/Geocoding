@@ -200,7 +200,7 @@ def _is_recharge_member(user_id):
         return False
 
 
-def _request_deepseek_completion(api_key, api_base, model, messages, max_tokens=None):
+def _request_deepseek_completion(api_key, api_base, model, messages, max_tokens=None, timeout=25):
     payload = {
         'model': model,
         'messages': messages,
@@ -214,7 +214,7 @@ def _request_deepseek_completion(api_key, api_base, model, messages, max_tokens=
         f"{api_base.rstrip('/')}/chat/completions",
         headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
         json=payload,
-        timeout=90,
+        timeout=timeout,
     )
     response.raise_for_status()
     data = response.json()
@@ -283,9 +283,11 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
                         model,
                         messages,
                         max_tokens,
+                        current_app.config.get('MODEL_REQUEST_TIMEOUT', 25),
                     )
                 else:
                     kwargs = {'model': model, 'messages': messages}
+                    kwargs['timeout'] = current_app.config.get('MODEL_REQUEST_TIMEOUT', 25)
                     if max_tokens:
                         kwargs['max_tokens'] = max_tokens
                     response = await asyncio.to_thread(client.chat.completions.create, **kwargs)

@@ -9,6 +9,13 @@ import { updateUserBar } from './auth.js';
  * @returns {Promise<object>} - A promise that resolves with the JSON response.
  */
 export async function fetchAPI(url, options = {}) {
+    const requestId = (window.crypto && typeof window.crypto.randomUUID === 'function')
+        ? window.crypto.randomUUID()
+        : `web-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const startedAt = Date.now();
+    let phase = 'fetch';
+    let responseReceived = false;
+    let responseStatus = null;
     // Get CSRF token dynamically on each request to avoid cache issues
     const csrfTokenElement = document.querySelector('meta[name="csrf-token"]');
     const csrfToken = csrfTokenElement ? csrfTokenElement.getAttribute('content') : '';
@@ -32,12 +39,16 @@ export async function fetchAPI(url, options = {}) {
         ...options,
         headers: {
             ...defaultHeaders,
+            'X-Request-ID': requestId,
             ...options.headers,
         },
     };
 
     try {
         const response = await fetch(url, config);
+        responseReceived = true;
+        responseStatus = response.status;
+        phase = 'response';
         
         if (response.status === 401) {
             // Unauthorized, redirect to login page or show login modal
@@ -66,8 +77,17 @@ export async function fetchAPI(url, options = {}) {
             return { success: true };
         }
         
+        phase = 'response_json';
         return await response.json();
     } catch (error) {
+        error.apiContext = {
+            endpoint: String(url).split('?', 1)[0],
+            requestId,
+            phase,
+            responseReceived,
+            responseStatus,
+            elapsedMs: Date.now() - startedAt,
+        };
         console.error('API call failed:', error);
         showToast(`操作失败: ${error.message}`, 'danger');
         throw error;
@@ -286,6 +306,27 @@ export async function autoSelectPoint(poiResults, originalAddress, sourceContext
         }
         return response;
     } catch (error) {
+        const context = error.apiContext || {};
+        if (!context.responseReceived) {
+            window.reportClientError?.({
+                kind: 'network',
+                type: error.name || 'FetchNetworkError',
+                message: '智能选择请求在浏览器连接层失败',
+                stack: error.stack || '',
+                location: ENDPOINTS.geocodeAutoSelect,
+                context: {
+                    operation: 'auto_select_point',
+                    request_id: context.requestId || null,
+                    phase: context.phase || 'unknown',
+                    elapsed_ms: context.elapsedMs ?? null,
+                    response_received: false,
+                    browser_online: navigator.onLine,
+                    page_visibility: document.visibilityState,
+                    candidate_count: Array.isArray(poiResults) ? poiResults.length : 0,
+                    source_context: String(sourceContext || '').slice(0, 80),
+                }
+            });
+        }
         // console.error('[DEBUG] Error in autoSelectPoint API call:', error);
         // Re-throw the error so the calling function knows the operation failed.
         // This is crucial for the UI to react correctly (e.g., stop loading spinners).
