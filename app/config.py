@@ -47,7 +47,7 @@ class Config:
     DEEPSEEK_API_BASE = os.environ.get('DEEPSEEK_API_BASE', 'https://api.deepseek.com')
     DEEPSEEK_MODEL = os.environ.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
     # A provider attempt must finish well before Gunicorn's 120-second worker
-    # timeout. Three primary attempts plus one fallback stay below that limit.
+    # timeout. GLM is attempted once before switching to the fallback model.
     MODEL_REQUEST_TIMEOUT = float(os.environ.get('MODEL_REQUEST_TIMEOUT', '25'))
     # URPA 同款自托管元搜索；生产环境应显式指向同机或内网 SearXNG 服务。
     SEARXNG_URL = os.environ.get('SEARXNG_URL', 'http://127.0.0.1:8888')

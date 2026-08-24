@@ -96,7 +96,7 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
     @patch('app.services.llm_service.random.uniform', return_value=0)
     @patch('app.services.llm_service.asyncio.sleep', new_callable=AsyncMock)
     @patch('app.services.llm_service.requests.post')
-    def test_regular_user_falls_back_to_deepseek_after_glm_retries(
+    def test_regular_user_falls_back_to_deepseek_after_one_glm_attempt(
             self, post, sleep, _uniform):
         user = self._create_user('glm-fallback@example.test')
         completion = MagicMock(side_effect=RuntimeError('temporary GLM failure'))
@@ -112,8 +112,8 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         result = asyncio.run(llm_service.call_llm_api('test', user_id=user.id))
 
         self.assertIsNone(result['error'])
-        self.assertEqual(completion.call_count, 3)
-        self.assertEqual([call.args[0] for call in sleep.await_args_list], [1, 2])
+        self.assertEqual(completion.call_count, 1)
+        sleep.assert_not_awaited()
         self.assertEqual(post.call_count, 1)
         self.assertEqual(result['provider'], 'deepseek')
         self.assertEqual(result['fallback_from'], 'zhipuai')

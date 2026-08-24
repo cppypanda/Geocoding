@@ -265,7 +265,10 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
             {'role': 'user', 'content': prompt},
         ]
 
-        attempts = max(1, int(max_retries or 1))
+        # GLM is the regular-user primary model: try it once, then fail over to
+        # DeepSeek immediately. DeepSeek-primary requests retain their existing
+        # retry count for paid members.
+        attempts = 1 if provider == 'zhipuai' else max(1, int(max_retries or 1))
         last_error = None
         provider_available = bool(deepseek_key) if use_deepseek else bool(client)
         if not provider_available:
