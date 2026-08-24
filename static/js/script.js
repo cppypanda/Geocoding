@@ -11,7 +11,7 @@ import { initializeAddressCleaner } from './modules/address-cleaner.js';
 import { initializeAddressInput } from './modules/address-input.js';
 import { handleGeocodeClick, handleAutoSelect } from './modules/geocoding.js';
 import { ENDPOINTS, SELECTORS } from './modules/constants.js';
-import { startSmartCalibration } from './modules/smart-calibration.js';
+import { startSmartCalibration } from './modules/smart-calibration.js?v=1.0.2';
 import { initializeMapSearch, getPoiResults } from './modules/map-search.js';
 import { initializeNotifications } from './modules/notifications.js';
 import { exportData, fetchAPI } from './modules/api.js';

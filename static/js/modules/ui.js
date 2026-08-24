@@ -131,6 +131,10 @@ export function displayCascadeResults(tbody, data, highlightIndex = -1, indexOff
         `;
     });
 
+    Array.from(tbody.rows).forEach((row, index) => {
+        row.dataset.resultIndex = String(index + indexOffset);
+    });
+
     // Add 'selected' class to the highlighted row
     if (highlightIndex > -1) {
         const localIndex = highlightIndex - indexOffset;

@@ -1,4 +1,5 @@
 import { showToast, showLoading, hideLoading } from './utils.js';
+import { shouldCalibrateConfidence } from './smart-calibration-targets.js';
 
 // Helper function to introduce a delay
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -139,8 +140,16 @@ async function calibrateSingleAddress(row, rowIndex) {
     try {
         // 2.1. Prepare
         // console.log('[DEBUG] Step 2.1: Preparing panel...');
-        const viewButton = row.querySelector('.btn-outline-primary');
-        if (viewButton) viewButton.click();
+        if (typeof window.showItemInDetailedView === 'function') {
+            window.showItemInDetailedView(rowIndex);
+            await sleep(250);
+        } else {
+            const viewButton = row.querySelector('.btn-outline-primary');
+            if (!viewButton) {
+                throw new Error('无法打开此记录的逐条校准界面。');
+            }
+            viewButton.click();
+        }
         
         // Wait for the main panel to show up first
         await waitForElementVisible('#detailedReviewSection');
@@ -241,15 +250,13 @@ export async function startSmartCalibration() {
 
     const rows = Array.from(resultsTableBody.querySelectorAll('tr'));
     const rowsToCalibrate = rows.filter(row => {
-        const confidenceCell = row.querySelector('td:nth-child(8) span');
-        if (!confidenceCell) return false;
-        const confidence = parseFloat(confidenceCell.textContent);
-        return confidence < 90;
+        const confidenceCell = row.querySelector('td:nth-child(8)');
+        return shouldCalibrateConfidence(confidenceCell?.textContent);
     });
 
     if (rowsToCalibrate.length === 0) {
         hideLoading();
-        showToast("没有可信度低于90%的地址需要校准。", "info");
+        showToast("没有无结果或可信度低于90%的地址需要校准。", "info");
         return;
     }
 
@@ -260,7 +267,8 @@ export async function startSmartCalibration() {
     let failCount = 0;
 
     for (const row of rowsToCalibrate) {
-        const rowIndex = rows.indexOf(row);
+        const storedIndex = Number.parseInt(row.dataset.resultIndex, 10);
+        const rowIndex = Number.isInteger(storedIndex) ? storedIndex : rows.indexOf(row);
         const originalAddress = row.querySelector('td:nth-child(2)').textContent.trim();
         showLoading(`正在校准: ${originalAddress.substring(0, 15)}... (${successCount + failCount + 1}/${rowsToCalibrate.length})`);
         

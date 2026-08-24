@@ -255,7 +255,7 @@ function updateCalibrationMapMarkers() {
     }
 
     // 始终绘制“当前选定结果”标记
-    if (state.currentResultData.selected_result && typeof state.currentResultData.selected_result.result.latitude_gcj02 === 'number') {
+    if (state.currentResultData.selected_result?.result && typeof state.currentResultData.selected_result.result.latitude_gcj02 === 'number') {
         const sel = state.currentResultData.selected_result;
         const selRes = sel.result;
         

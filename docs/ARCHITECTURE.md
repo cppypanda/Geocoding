@@ -42,7 +42,7 @@
 
 *   **实现范例: `app/routes/geocoding.py`**
     *   该文件完美诠释了路由层的职责。它定义了 `/geocode/process` 端点。
-    *   它严格遵循 `docs/SOP_Multi_Source_Geocoding.md` 中定义的**瀑布流逻辑**，依次调用 `amap`, `tianditu`, `baidu` 等地理编码服务。
+    *   它严格遵循 `docs/SOP_Multi_Source_Geocoding.md` 中定义的**瀑布流逻辑**，依次调用 `baidu`, `tianditu`, `amap` 等地理编码服务。
     *   它调用 `address_processing` 工具来计算置信度，并最终选择优胜者。
 
 ### 3.2. 服务与交互层 (`app/services/`)
@@ -91,13 +91,13 @@
 
 1.  **[路由层]** `geocoding.py` 的 `/process` 端点收到一个包含地址的请求。
 2.  **[路由层]** 调用 **工具层** `address_processing.py` 中的函数执行地址补全和初步解析 (SOP 步骤一)。
-3.  **[路由层]** 启动瀑布流，调用 **服务层** `geocoding_apis.py` 中的 `AmapGeocoder.geocode()`。
-4.  **[服务层]** `AmapGeocoder` 向高德发起HTTP调用，并获取原始JSON响应。
-5.  **[服务层]** `AmapGeocoder` 内部调用 **工具层** 的 `calculate_unified_confidence` 来完成SOP中定义的"内部选优"。
-6.  **[服务层]** `AmapGeocoder` 将最佳候选者标准化为内部格式，并返回给 **路由层**。
-7.  **[路由层]** 检查结果的置信度。如果太低，则继续调用 **服务层** 的 `TiandituGeocoder.geocode()`。
-8.  **[服务层]** `TiandituGeocoder` 发起HTTP调用，获取原始响应，并将其标准化（包含原生分数）。
-9.  **[路由层]** 收到标准化的结果，并调用 **工具层** 的 `calculate_confidence_B` 来计算其置信度。
-10. **[路由层]** 持续此流程，直到选出"优胜者"。
+3.  **[路由层]** 启动瀑布流，调用 **服务层** `geocoding_apis.py` 中的 `BaiduGeocoder.geocode()`。
+4.  **[服务层]** `BaiduGeocoder` 向百度发起HTTP调用，将结果及原生置信度指标标准化后返回给 **路由层**。
+5.  **[路由层]** 检查百度结果的置信度。如果太低或请求失败，则继续调用 **服务层** 的 `TiandituGeocoder.geocode()`。
+6.  **[服务层]** `TiandituGeocoder` 发起HTTP调用，获取原始响应，并将其标准化（包含原生分数）。
+7.  **[路由层]** 若天地图仍未满足阈值或请求失败，则继续调用 `AmapGeocoder.geocode()`。
+8.  **[服务层]** `AmapGeocoder` 使用统一置信度算法完成服务商内部的候选选优，并返回最佳候选。
+9.  **[路由层]** 任一候选满足阈值时立即选为"优胜者"；否则在全部可用候选中选择置信度最高者。
+10. **[路由层]** 若没有任何服务返回可用候选，则返回无选中结果，并交由智能校准的 POI 自动降级流程处理。
 11. **[路由层]** 如果SOP要求，调用优胜者对应的 **服务层** `Geocoder` 类中的 `reverse_geocode` 方法进行结果增强。
-12. **[路由层]** 将最终增强后的结果格式化为JSON并发送响应。 
+12. **[路由层]** 将最终增强后的结果格式化为JSON并发送响应。
