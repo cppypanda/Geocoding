@@ -68,7 +68,7 @@ export async function fetchAPI(url, options = {}) {
                 // If the error response is not JSON, use the status text
                 throw new Error(response.statusText || 'Network response was not ok');
             }
-            const errorMessage = errorData.message || 'An unknown error occurred.';
+            const errorMessage = errorData.message || errorData.error || 'An unknown error occurred.';
             throw new Error(errorMessage);
         }
         

@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_login import login_required, current_user
 from app.services import task_service
+from app.services.error_center import capture_exception
 import datetime
 
 # 创建一个名为 'tasks' 的蓝图
@@ -47,13 +48,17 @@ def create_task():
     
     try:
         task_id = task_service.create_task(user_id, task_name.strip(), result_data)
-        return jsonify({"message": "任务保存成功", "task_id": task_id}), 201
+        return jsonify({"success": True, "message": "任务保存成功", "task_id": task_id}), 201
     except ValueError as e:
         # 由 service 层捕获的 UNIQUE 约束冲突
-        return jsonify({"error": str(e)}), 409 # 409 Conflict
+        return jsonify({"success": False, "error": str(e)}), 409 # 409 Conflict
     except Exception as e:
-        # 捕获未预期错误，避免 500 泄露
-        return jsonify({"error": "任务保存失败"}), 500
+        error_id = capture_exception(e, source='task_create')
+        return jsonify({
+            "success": False,
+            "error": "任务保存失败",
+            "error_reference": f"ERR-{error_id}" if error_id else None,
+        }), 500
 
 @task_bp.route('/<int:task_id>', methods=['GET'])
 @login_required
@@ -91,9 +96,9 @@ def update_task(task_id):
     rows_affected = task_service.update_task(task_id, user_id, new_result_data)
     
     if rows_affected > 0:
-        return jsonify({"message": "任务更新成功"})
+        return jsonify({"success": True, "message": "任务更新成功"})
     else:
-        return jsonify({"error": "找不到要更新的任务或无访问权限"}), 404
+        return jsonify({"success": False, "error": "找不到要更新的任务或无访问权限"}), 404
 
 @task_bp.route('/<int:task_id>', methods=['DELETE'])
 @login_required
