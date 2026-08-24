@@ -117,5 +117,5 @@ class APIRateLimiter:
 
 # Global limiter instances
 baidu_limiter = APIRateLimiter(3)
-tianditu_limiter = APIRateLimiter(1)
+tianditu_limiter = APIRateLimiter(3)
 amap_limiter = APIRateLimiter(3)
