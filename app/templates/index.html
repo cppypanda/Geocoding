@@ -413,9 +413,9 @@
                                     <div class="input-group">
                                         <input type="text" id="mapSearchInput" class="form-control" placeholder="输入地点名称...">
                                         <select id="map-search-source" class="form-select" style="max-width: 100px; border-top-left-radius: 0; border-bottom-left-radius: 0;">
-                                            <option value="tianditu" selected>天地图</option>
+                                            <option value="baidu" selected>百度</option>
+                                            <option value="tianditu">天地图</option>
                                             <option value="amap">高德</option>
-                                            <option value="baidu">百度</option>
                                         </select>
                                         <button class="btn btn-primary" type="button" id="mapSearchBtn">
                                             <i class="bi bi-search"></i> 搜索
@@ -1144,6 +1144,6 @@
         window.__POINTS_AWARD_BY_SERVICE__ = JSON.parse('{{ points_award_by_service | tojson | safe }}');
     </script>
     <script src="{{ url_for('static', filename='js/error-reporter.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.2" type="module"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.3" type="module"></script>
 </body>
 </html>

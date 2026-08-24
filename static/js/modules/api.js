@@ -235,7 +235,7 @@ export async function exportData(format, data, locationName) {
  * @param {string} source - The search source ('amap', 'baidu', 'tianditu').
  * @returns {Promise<Object>} The search results from the API.
  */
-export async function performMapSearch(searchTerm, source = 'amap') {
+export async function performMapSearch(searchTerm, source = 'baidu') {
     // console.log(`开始地图搜索 (源: ${source}): ${searchTerm}`);
     const endpoint = ENDPOINTS.geocodePoiSearch;
     try {

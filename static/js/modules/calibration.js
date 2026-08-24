@@ -346,7 +346,7 @@ function displaySmartSearchResults(data) {
 
 
 // --- Map Search ---
-async function handleMapSearch(searchTerm, source = 'amap', sourceContext) {
+async function handleMapSearch(searchTerm, source = 'baidu', sourceContext) {
     const mapSearchSpinner = document.getElementById('mapSearchSpinner');
     if(mapSearchSpinner) mapSearchSpinner.style.display = 'block';
 
@@ -560,7 +560,7 @@ function handleMapPoiSelection(index, selectionReason = null) {
 
         // Update the main selected result object
         state.currentResultData.selected_result = {
-            api: (selectedPoi.source_api || 'amap').replace('_poi', ''),
+            api: (selectedPoi.source_api || 'baidu').replace('_poi', ''),
             confidence: selectedPoi.confidence,
             result: {
                 ...selectedPoi, // copy all properties from poi

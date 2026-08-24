@@ -168,7 +168,7 @@ async function calibrateSingleAddress(row, rowIndex) {
         // console.log(`[DEBUG] Step 2.1: Recorded initial selected address: "${initialAddressText}"`);
 
         // 2.2. POI Search Pole
-        const poiSources = ['tianditu', 'amap', 'baidu'];
+        const poiSources = ['baidu', 'tianditu', 'amap'];
         for (const source of poiSources) {
             // console.log(`[DEBUG] Step 2.2: Trying POI source: ${source.toUpperCase()}`);
             setSelectValue('#map-search-source', source);
@@ -210,7 +210,7 @@ async function calibrateSingleAddress(row, rowIndex) {
         const keywordButtons = document.querySelectorAll('.use-keyword-btn');
         if (keywordButtons.length > 0) {
             // console.log(`[DEBUG] Step 2.3c: Found ${keywordButtons.length} keywords to try.`);
-            setSelectValue('#map-search-source', 'tianditu'); // 新顺序：关键词优先用天地图
+            setSelectValue('#map-search-source', 'baidu'); // 关键词二次搜索与POI轮询统一为百度优先
             for (const button of keywordButtons) {
                 const keywordText = button.closest('.keyword-suggestion').querySelector('strong').textContent;
                 // console.log(`[DEBUG] Step 2.3c: Trying keyword: "${keywordText}"`);

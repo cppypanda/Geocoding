@@ -927,7 +927,7 @@ async def poi_search_route():
             return jsonify({'success': False, 'results': [], 'message': '无效的请求数据'}), 400
 
         keyword = data.get('keyword')
-        source = data.get('source', 'amap') # Default to amap if not provided
+        source = data.get('source', 'baidu')  # POI搜索默认使用百度
         user_id = current_user.id
 
         if not keyword:
