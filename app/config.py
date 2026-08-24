@@ -49,6 +49,9 @@ class Config:
     # A provider attempt must finish well before Gunicorn's 120-second worker
     # timeout. GLM is attempted once before switching to the fallback model.
     MODEL_REQUEST_TIMEOUT = float(os.environ.get('MODEL_REQUEST_TIMEOUT', '25'))
+    # A GLM 1305 response means provider-wide overload. Skip GLM temporarily
+    # so subsequent requests do not all pay for the same predictable failure.
+    ZHIPU_OVERLOAD_COOLDOWN_SECONDS = int(os.environ.get('ZHIPU_OVERLOAD_COOLDOWN_SECONDS', '300'))
     # URPA 同款自托管元搜索；生产环境应显式指向同机或内网 SearXNG 服务。
     SEARXNG_URL = os.environ.get('SEARXNG_URL', 'http://127.0.0.1:8888')
     SEARXNG_API_KEY = os.environ.get('SEARXNG_API_KEY')

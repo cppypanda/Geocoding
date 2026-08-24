@@ -27,8 +27,10 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.context = self.app.app_context()
         self.context.push()
         db.create_all()
+        llm_service._zhipu_overload_circuit_until = 0.0
 
     def tearDown(self):
+        llm_service._zhipu_overload_circuit_until = 0.0
         db.session.remove()
         db.drop_all()
         self.context.pop()
@@ -119,6 +121,33 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.assertEqual(result['fallback_from'], 'zhipuai')
 
     @patch('app.services.llm_service.requests.post')
+    def test_glm_1305_opens_circuit_and_next_request_bypasses_glm(self, post):
+        user = self._create_user('glm-overload-circuit@example.test')
+        provider_error = RuntimeError('provider overloaded')
+        provider_error.status_code = 429
+        provider_error.code = '1305'
+        completion = MagicMock(side_effect=provider_error)
+        self.app.extensions['zhipuai_client'] = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=completion))
+        )
+        http_response = MagicMock()
+        http_response.json.return_value = {
+            'choices': [{'message': {'content': 'deepseek-ok'}}]
+        }
+        post.return_value = http_response
+
+        first = asyncio.run(llm_service.call_llm_api('first', user_id=user.id))
+        second = asyncio.run(llm_service.call_llm_api('second', user_id=user.id))
+
+        self.assertIsNone(first['error'])
+        self.assertIsNone(second['error'])
+        self.assertEqual(completion.call_count, 1)
+        self.assertEqual(post.call_count, 2)
+        self.assertGreater(llm_service._zhipu_overload_circuit_remaining(), 0)
+        self.assertEqual(second['provider'], 'deepseek')
+        self.assertEqual(second['fallback_from'], 'zhipuai')
+
+    @patch('app.services.llm_service.requests.post')
     def test_provider_failure_records_only_safe_diagnostics(self, post):
         user = self._create_user('provider-diagnostics@example.test')
         provider_error = RuntimeError('raw provider body with secret-token-value')
@@ -155,6 +184,7 @@ class ModelRoutingAndGeocoderOrderTests(unittest.TestCase):
         self.assertIn('provider_request_id=vendor-request-abc123', record.message)
         self.assertNotIn('secret-token-value', record.message)
         self.assertNotIn('prompt-must-not-be-recorded', record.message)
+        self.assertEqual(llm_service._zhipu_overload_circuit_remaining(), 0)
 
     def test_deepseek_http_error_extracts_code_and_response_request_id(self):
         response = MagicMock()

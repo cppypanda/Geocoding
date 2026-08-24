@@ -4,6 +4,7 @@ import asyncio
 import traceback
 import requests
 import random
+import time
 from datetime import datetime
 from flask import current_app, has_request_context, request
 from flask_login import current_user
@@ -13,6 +14,29 @@ from sqlalchemy.orm import sessionmaker
 from .. import db
 from ..models import RechargeOrder
 from .web_search_local import search_web
+
+
+_zhipu_overload_circuit_until = 0.0
+
+
+def _zhipu_overload_circuit_remaining():
+    return max(0.0, _zhipu_overload_circuit_until - time.monotonic())
+
+
+def _open_zhipu_overload_circuit():
+    global _zhipu_overload_circuit_until
+    cooldown = max(
+        0,
+        int(current_app.config.get('ZHIPU_OVERLOAD_COOLDOWN_SECONDS', 300)),
+    )
+    _zhipu_overload_circuit_until = max(
+        _zhipu_overload_circuit_until,
+        time.monotonic() + cooldown,
+    )
+    current_app.logger.warning(
+        "ZHIPU_OVERLOAD_CIRCUIT_OPEN cooldown_seconds=%s provider_code=1305",
+        cooldown,
+    )
 
 
 def _safe_diagnostic_value(value, limit=128):
@@ -340,6 +364,20 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
             if _is_recharge_member(resolved_user_id) and bool(deepseek_key)
             else 'zhipuai'
         )
+    circuit_fallback_from = None
+    if (
+        not _forced_provider
+        and provider == 'zhipuai'
+        and deepseek_key
+        and _zhipu_overload_circuit_remaining() > 0
+    ):
+        current_app.logger.warning(
+            "ZHIPU_OVERLOAD_CIRCUIT_BYPASS remaining_seconds=%s; "
+            "current request uses deepseek",
+            int(_zhipu_overload_circuit_remaining()) + 1,
+        )
+        provider = 'deepseek'
+        circuit_fallback_from = 'zhipuai'
     use_deepseek = provider == 'deepseek'
     model = (
         current_app.config.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
@@ -397,15 +435,17 @@ async def call_llm_api(prompt, max_retries=3, user_id=None, max_tokens=None,
                     'error': None,
                     'provider': provider,
                     'model': model,
-                    'fallback_from': None,
+                    'fallback_from': circuit_fallback_from,
                 }
 
             except Exception as e:
                 last_error = e
                 llm_res_ts = datetime.now().isoformat()
-                _record_model_provider_failure(
+                diagnostics = _record_model_provider_failure(
                     provider, model, attempt + 1, attempts, e
                 )
+                if provider == 'zhipuai' and diagnostics['provider_code'] == '1305':
+                    _open_zhipu_overload_circuit()
                 if _is_non_retryable_model_error(e):
                     current_app.logger.error(
                         "%s 模型发生不可重试错误，将直接尝试灾备模型：%s",
