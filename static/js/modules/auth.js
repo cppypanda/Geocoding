@@ -63,6 +63,10 @@ export function updateUserBar(user = null) {
     const userPointsDisplay = document.getElementById('user-points');
     const settingsEmailInput = document.getElementById('settingsEmail');
     const settingsUsernameInput = document.getElementById('settingsUsername');
+    const settingsPhoneInput = document.getElementById('settingsPhoneNumber');
+    const settingsPhoneStatus = document.getElementById('settingsPhoneStatus');
+    const togglePhoneBindingBtn = document.getElementById('togglePhoneBindingBtn');
+    const phoneBindingReminder = document.getElementById('phoneBindingReminder');
 
     const existingAdminBtn = document.getElementById('admin-panel-btn');
     if (existingAdminBtn) {
@@ -76,10 +80,30 @@ export function updateUserBar(user = null) {
     if (user) {
         userUnsignedDiv.classList.add('d-none');
         userSignedDiv.classList.remove('d-none');
-        usernameDisplay.textContent = user.username || user.email.split('@')[0];
+        usernameDisplay.textContent = user.username || user.phone_masked || user.email?.split('@')[0] || 'GeoCo用户';
         userPointsDisplay.textContent = user.points !== undefined ? user.points : 0;
-        if(settingsEmailInput) settingsEmailInput.value = user.email;
+        if(settingsEmailInput) settingsEmailInput.value = user.email || '使用 URPA 手机号注册';
         if(settingsUsernameInput) settingsUsernameInput.value = user.username || '';
+        if(settingsPhoneInput) settingsPhoneInput.value = user.phone || '';
+        if(settingsPhoneStatus) {
+            settingsPhoneStatus.textContent = user.urpa_linked
+                ? '已关联 URPA 统一账户，可继续使用原邮箱登录。'
+                : '绑定后可继续使用原邮箱登录，积分和任务不会迁移或清空。';
+        }
+        if(togglePhoneBindingBtn) {
+            togglePhoneBindingBtn.classList.toggle('d-none', Boolean(user.urpa_linked));
+        }
+        if(phoneBindingReminder) {
+            let dismissedUntil = 0;
+            try {
+                dismissedUntil = Number(localStorage.getItem(`geoco.phone_binding.dismissed_until.${user.id}`) || 0);
+            } catch (_) {}
+            phoneBindingReminder.classList.toggle(
+                'd-none',
+                !user.needs_phone_binding || dismissedUntil > Date.now()
+            );
+        }
+        window.currentUser = user;
 
         if (user.is_admin) {
             const adminBtn = createAndAppendElement('a', {
@@ -95,6 +119,9 @@ export function updateUserBar(user = null) {
         userSignedDiv.classList.add('d-none');
         if(settingsEmailInput) settingsEmailInput.value = '';
         if(settingsUsernameInput) settingsUsernameInput.value = '';
+        if(settingsPhoneInput) settingsPhoneInput.value = '';
+        if(phoneBindingReminder) phoneBindingReminder.classList.add('d-none');
+        window.currentUser = null;
     }
     // 更新推荐信息
     updateReferralCardInfo();
@@ -238,6 +265,125 @@ export async function handleDeleteAccount(event) {
     } catch (e) {
         showToast('注销请求失败', 'error');
     }
+}
+
+function setUrpaMode(scope, mode) {
+    const isLogin = scope === 'login';
+    const modeInput = document.getElementById(isLogin ? 'urpaLoginMode' : 'phoneBindingMode');
+    const codeGroup = document.getElementById(isLogin ? 'urpaLoginCodeGroup' : 'phoneBindingCodeGroup');
+    const passwordInput = document.getElementById(isLogin ? 'urpaLoginPassword' : 'phoneBindingPassword');
+    const submitBtn = document.getElementById(isLogin ? 'urpaLoginSubmitBtn' : 'confirmPhoneBindingBtn');
+    if (modeInput) modeInput.value = mode;
+    if (codeGroup) codeGroup.classList.toggle('d-none', mode === 'password');
+    if (passwordInput) {
+        passwordInput.value = '';
+        passwordInput.placeholder = mode === 'password' ? 'URPA 密码' : '设置新的 URPA 密码（至少6位）';
+        passwordInput.autocomplete = mode === 'password' ? 'current-password' : 'new-password';
+    }
+    if (submitBtn) {
+        submitBtn.textContent = isLogin
+            ? (mode === 'password' ? 'URPA 手机号登录' : mode === 'reset' ? '重置密码并登录' : '注册 URPA 并登录')
+            : (mode === 'password' ? '验证并绑定' : '注册 URPA 并绑定');
+    }
+}
+
+async function sendUrpaCode(button, phoneInputId, modeInputId) {
+    const phone = document.getElementById(phoneInputId)?.value.trim() || '';
+    const mode = document.getElementById(modeInputId)?.value || 'register';
+    if (!phone) {
+        showToast('请输入手机号', 'warning');
+        return;
+    }
+    const originalText = button.textContent;
+    button.disabled = true;
+    try {
+        const data = await fetchAPI(ENDPOINTS.urpaSendCode, {
+            method: 'POST',
+            body: JSON.stringify({ phone, purpose: mode === 'reset' ? 'reset' : 'register' })
+        });
+        showToast(data.message || '短信验证码已发送', 'success');
+        let seconds = 60;
+        button.textContent = `重新发送 (${seconds})`;
+        const timer = setInterval(() => {
+            seconds -= 1;
+            button.textContent = `重新发送 (${seconds})`;
+            if (seconds <= 0) {
+                clearInterval(timer);
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        }, 1000);
+    } catch (error) {
+        button.disabled = false;
+        button.textContent = originalText;
+        showToast(error.message || '验证码发送失败', 'error');
+    }
+}
+
+async function finishUrpaLogin(data) {
+    updateUserBar(data.user);
+    refreshApiKeysStatus();
+    try { await tryBindReferralIfPresent(); } catch (_) {}
+    const loginModal = bootstrap.Modal.getInstance(document.getElementById('loginRegisterModal'));
+    if (loginModal) loginModal.hide();
+    if (window.actionAfterLogin && typeof window.actionAfterLogin === 'function') {
+        window.actionAfterLogin();
+        window.actionAfterLogin = null;
+    }
+}
+
+async function handleUrpaLogin(event) {
+    event.preventDefault();
+    const phone = document.getElementById('urpaLoginPhone')?.value.trim() || '';
+    const password = document.getElementById('urpaLoginPassword')?.value || '';
+    const code = document.getElementById('urpaLoginCode')?.value.trim() || '';
+    const mode = document.getElementById('urpaLoginMode')?.value || 'password';
+    if (!phone || !password || (mode !== 'password' && !code)) {
+        showToast('请填写完整的手机号、密码和验证码', 'warning');
+        return;
+    }
+    try {
+        const endpoint = mode === 'reset' ? ENDPOINTS.urpaResetPassword : ENDPOINTS.urpaLogin;
+        const data = await fetchAPI(endpoint, {
+            method: 'POST',
+            body: JSON.stringify({ phone, password, code, register: mode === 'register' })
+        });
+        showToast(data.message || 'URPA 登录成功', 'success');
+        await finishUrpaLogin(data);
+    } catch (error) {
+        showToast(error.message || 'URPA 登录失败', 'error');
+    }
+}
+
+async function handlePhoneBinding() {
+    const phone = document.getElementById('phoneBindingPhone')?.value.trim() || '';
+    const password = document.getElementById('phoneBindingPassword')?.value || '';
+    const code = document.getElementById('phoneBindingCode')?.value.trim() || '';
+    const mode = document.getElementById('phoneBindingMode')?.value || 'password';
+    if (!phone || !password || (mode === 'register' && !code)) {
+        showToast('请填写完整的手机号、密码和验证码', 'warning');
+        return;
+    }
+    try {
+        const data = await fetchAPI(ENDPOINTS.urpaLink, {
+            method: 'POST',
+            body: JSON.stringify({ phone, password, code, register: mode === 'register' })
+        });
+        updateUserBar(data.user);
+        document.getElementById('phoneBindingPanel')?.classList.add('d-none');
+        showToast(data.message || '手机号绑定成功', 'success');
+    } catch (error) {
+        showToast(error.message || '手机号绑定失败', 'error');
+    }
+}
+
+function openPhoneBindingPanel() {
+    const settingsModalEl = document.getElementById('settingsModal');
+    if (settingsModalEl) bootstrap.Modal.getOrCreateInstance(settingsModalEl).show();
+    const profileTab = document.getElementById('profile-tab');
+    if (profileTab) bootstrap.Tab.getOrCreateInstance(profileTab).show();
+    document.getElementById('phoneBindingPanel')?.classList.remove('d-none');
+    document.getElementById('phoneBindingPhone')?.focus();
 }
 
 /**
@@ -516,7 +662,7 @@ export function initializeAuthForms() {
             e.preventDefault();
             document.getElementById('loginRegisterTabContent').classList.remove('d-none');
             document.getElementById('register-set-password-pane').classList.add('d-none');
-            const firstTabEl = document.querySelector('#loginRegisterTabs button[data-bs-target="#account-login-pane"]');
+            const firstTabEl = document.querySelector('#loginRegisterTabs button[data-bs-target="#urpa-login-pane"]');
             if(firstTabEl) {
                 const firstTab = new bootstrap.Tab(firstTabEl);
                 firstTab.show();
@@ -558,6 +704,7 @@ export function initializeAuthForms() {
     // Form Submissions
     document.getElementById('loginModalForm')?.addEventListener('submit', handleEmailLoginRegister);
     document.getElementById('accountLoginForm')?.addEventListener('submit', handleAccountLogin);
+    document.getElementById('urpaLoginForm')?.addEventListener('submit', handleUrpaLogin);
     document.getElementById('registerSetPasswordForm')?.addEventListener('submit', handleRegisterSetPassword);
     document.getElementById('forgotPasswordForm')?.addEventListener('submit', handleResetPassword);
 
@@ -565,6 +712,36 @@ export function initializeAuthForms() {
     document.getElementById('modalSendVerificationCodeBtn')?.addEventListener('click', handleSendVerificationCode);
     document.getElementById('registerSendVerificationCodeBtn')?.addEventListener('click', handleSendVerificationCode);
     document.getElementById('sendForgotVerificationCodeBtn')?.addEventListener('click', handleSendVerificationCode);
+    document.getElementById('urpaLoginSendCodeBtn')?.addEventListener('click', (event) => {
+        void sendUrpaCode(event.currentTarget, 'urpaLoginPhone', 'urpaLoginMode');
+    });
+    document.getElementById('phoneBindingSendCodeBtn')?.addEventListener('click', (event) => {
+        void sendUrpaCode(event.currentTarget, 'phoneBindingPhone', 'phoneBindingMode');
+    });
+    document.getElementById('urpaRegisterToggle')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        setUrpaMode('login', document.getElementById('urpaLoginMode')?.value === 'register' ? 'password' : 'register');
+    });
+    document.getElementById('urpaResetToggle')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        setUrpaMode('login', document.getElementById('urpaLoginMode')?.value === 'reset' ? 'password' : 'reset');
+    });
+    document.getElementById('phoneBindingRegisterToggle')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        setUrpaMode('binding', document.getElementById('phoneBindingMode')?.value === 'register' ? 'password' : 'register');
+    });
+    document.getElementById('confirmPhoneBindingBtn')?.addEventListener('click', () => void handlePhoneBinding());
+    document.getElementById('togglePhoneBindingBtn')?.addEventListener('click', openPhoneBindingPanel);
+    document.getElementById('openPhoneBindingBtn')?.addEventListener('click', openPhoneBindingPanel);
+    document.getElementById('dismissPhoneBindingBtn')?.addEventListener('click', () => {
+        const user = window.currentUser;
+        if (user?.id) {
+            try {
+                localStorage.setItem(`geoco.phone_binding.dismissed_until.${user.id}`, String(Date.now() + 7 * 86400000));
+            } catch (_) {}
+        }
+        document.getElementById('phoneBindingReminder')?.classList.add('d-none');
+    });
     
     // Assign purpose to buttons
     if (document.getElementById('modalSendVerificationCodeBtn')) document.getElementById('modalSendVerificationCodeBtn').dataset.purpose = 'register_login';

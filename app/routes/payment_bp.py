@@ -723,11 +723,23 @@ def admin_points():
 
     if q:
         like_pattern = f"%{q}%"
-        query = query.filter(db.or_(User.email.like(like_pattern), User.username.like(like_pattern)))
+        query = query.filter(db.or_(
+            User.email.like(like_pattern),
+            User.username.like(like_pattern),
+            User.phone.like(like_pattern),
+            User.urpa_user_id.like(like_pattern),
+        ))
 
     users = query.all()
     total_user_count = User.query.count()
-    return render_template('admin/points.html', users=users, q=q, total_user_count=total_user_count)
+    urpa_linked_count = User.query.filter(User.urpa_user_id.isnot(None)).count()
+    return render_template(
+        'admin/points.html',
+        users=users,
+        q=q,
+        total_user_count=total_user_count,
+        urpa_linked_count=urpa_linked_count,
+    )
 
 @payment_bp.route('/admin/points/grant', methods=['POST'])
 @admin_required

@@ -8,11 +8,12 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, current_app
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import login_user, logout_user, current_user
+from sqlalchemy import or_
 
 from .. import config # 导入顶层配置
-from ..services import user_service, email_service # 导入用户和邮件服务
+from ..services import user_service, email_service, urpa_auth # 导入用户和邮件服务
 from .. import db
-from ..models import EmailVerificationCode, User
+from ..models import BonusRewardLog, EmailVerificationCode, User
 
 auth_bp = Blueprint('auth', __name__) # 移除 url_prefix
 
@@ -41,6 +42,127 @@ _VERIFICATION_MAX_ATTEMPTS = 5
 
 def _normalize_email(email):
     return (email or '').strip().lower()
+
+
+def _public_email(user):
+    return None if user.account_origin == 'urpa' else user.email
+
+
+def _mask_phone(phone):
+    value = phone or ''
+    if len(value) >= 7:
+        return f'{value[:3]}****{value[-4:]}'
+    return value
+
+
+def _user_info(user):
+    email = _public_email(user)
+    fallback_name = _mask_phone(user.phone) or ((email or '').split('@')[0]) or 'GeoCo用户'
+    return {
+        'id': user.id,
+        'email': email,
+        'username': user.username or fallback_name,
+        'points': user.points or 0,
+        'is_admin': bool(user.is_admin),
+        'avatar_url': user.avatar_url,
+        'phone': user.phone,
+        'phone_masked': _mask_phone(user.phone),
+        'urpa_linked': bool(user.urpa_user_id),
+        'needs_phone_binding': not bool(user.urpa_user_id),
+        'account_origin': user.account_origin or 'email',
+    }
+
+
+def _synthetic_urpa_email(external_id):
+    digest = hashlib.sha256(external_id.encode('utf-8')).hexdigest()[:24]
+    return f'urpa-{digest}@accounts.invalid'
+
+
+def _resolve_urpa_user(identity):
+    user = User.query.filter(
+        or_(User.urpa_user_id == identity.external_id, User.phone == identity.phone)
+    ).first()
+    if user:
+        if user.is_deleted:
+            raise urpa_auth.UrpaAuthError('该 GeoCo 账户已注销', 403)
+        if user.urpa_user_id and user.urpa_user_id != identity.external_id:
+            raise urpa_auth.UrpaAuthError('该手机号的账户映射存在冲突，请联系管理员', 409)
+        user.urpa_user_id = identity.external_id
+        user.phone = identity.phone
+        user.urpa_linked_at = user.urpa_linked_at or datetime.utcnow()
+        db.session.commit()
+        return user
+
+    synthetic_email = _synthetic_urpa_email(identity.external_id)
+    reward_log = BonusRewardLog.query.filter_by(email=synthetic_email).first()
+    points = 0 if reward_log else current_app.config.get('NEW_USER_REWARD_POINTS', 100)
+    user = User(
+        email=synthetic_email,
+        password_hash=current_app.config['NO_PASSWORD_PLACEHOLDER'],
+        username=None,
+        phone=identity.phone,
+        urpa_user_id=identity.external_id,
+        urpa_linked_at=datetime.utcnow(),
+        account_origin='urpa',
+        points=points,
+        created_at=datetime.utcnow(),
+        registration_date=datetime.utcnow(),
+    )
+    db.session.add(user)
+    if points > 0 and not reward_log:
+        db.session.add(BonusRewardLog(email=synthetic_email))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        existing = User.query.filter(
+            or_(User.urpa_user_id == identity.external_id, User.phone == identity.phone)
+        ).first()
+        if existing and not existing.is_deleted:
+            return existing
+        raise
+    user_service.create_notification(
+        user.id,
+        '欢迎使用 URPA 手机号登录陆梧GeoCo。您的任务、积分和后续陆梧工具将通过同一身份关联。',
+    )
+    return user
+
+
+def _link_urpa_identity(user, identity):
+    if user.urpa_user_id and user.urpa_user_id != identity.external_id:
+        raise urpa_auth.UrpaAuthError(
+            '当前 GeoCo 账户已经绑定其他 URPA 身份。如需更换，请联系管理员核验。',
+            409,
+        )
+    conflict = User.query.filter(
+        User.id != user.id,
+        or_(User.urpa_user_id == identity.external_id, User.phone == identity.phone),
+    ).first()
+    if conflict:
+        raise urpa_auth.UrpaAuthError(
+            '该 URPA 手机号已关联另一个 GeoCo 账户。为保护积分和任务，暂不自动合并，请联系管理员处理。',
+            409,
+        )
+    user.phone = identity.phone
+    user.urpa_user_id = identity.external_id
+    user.urpa_linked_at = datetime.utcnow()
+    db.session.commit()
+    return user
+
+
+def _urpa_identity_from_request(data):
+    if data.get('register') is True:
+        return urpa_auth.register(
+            data.get('phone', ''), data.get('code', ''), data.get('password', '')
+        )
+    return urpa_auth.password_login(data.get('phone', ''), data.get('password', ''))
+
+
+def _urpa_error_response(error):
+    if isinstance(error, urpa_auth.UrpaAuthError):
+        return jsonify({'success': False, 'message': str(error)}), error.status_code
+    current_app.logger.exception('URPA 账户操作失败')
+    return jsonify({'success': False, 'message': '账户操作失败，请稍后重试'}), 500
 
 
 def _verification_digest(email, purpose, code):
@@ -187,17 +309,84 @@ def login_register_email():
     user_service.update_user_last_login(user.id)
     _check_and_sync_admin_status(user)
     
-    user_info = {
-        'id': user.id,
-        'email': user.email,
-        'username': user.username or user.email.split('@')[0],
-        'points': user.points,
-        'is_admin': user.is_admin,
-        'avatar_url': user.avatar_url
-    }
+    user_info = _user_info(user)
     
     message = '注册并登录成功' if new_user_created else '登录成功'
     return jsonify({'success': True, 'message': message, 'user': user_info})
+
+
+@auth_bp.route('/urpa_account_status', methods=['POST'])
+def urpa_account_status():
+    data = request.get_json(silent=True) or {}
+    try:
+        status = urpa_auth.account_status(data.get('phone', ''))
+        return jsonify({'success': True, **status})
+    except Exception as error:
+        return _urpa_error_response(error)
+
+
+@auth_bp.route('/urpa_send_code', methods=['POST'])
+def urpa_send_code():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = urpa_auth.send_code(data.get('phone', ''), data.get('purpose', 'register'))
+        return jsonify({'success': True, 'message': '短信验证码已发送', **result})
+    except Exception as error:
+        return _urpa_error_response(error)
+
+
+@auth_bp.route('/urpa_login', methods=['POST'])
+def urpa_login():
+    data = request.get_json(silent=True) or {}
+    try:
+        identity = _urpa_identity_from_request(data)
+        user = _resolve_urpa_user(identity)
+        login_user(user, remember=True)
+        user_service.update_user_last_login(user.id)
+        _check_and_sync_admin_status(user)
+        message = 'URPA 账号注册并登录成功' if data.get('register') is True else 'URPA 登录成功'
+        return jsonify({'success': True, 'message': message, 'user': _user_info(user)})
+    except Exception as error:
+        db.session.rollback()
+        return _urpa_error_response(error)
+
+
+@auth_bp.route('/urpa_link', methods=['POST'])
+def urpa_link():
+    if not current_user.is_authenticated:
+        return jsonify({'success': False, 'message': '请先登录原有 GeoCo 账户'}), 401
+    data = request.get_json(silent=True) or {}
+    try:
+        identity = _urpa_identity_from_request(data)
+        user = _link_urpa_identity(current_user, identity)
+        return jsonify({
+            'success': True,
+            'message': 'URPA 手机号已绑定，原有积分和任务保持不变',
+            'user': _user_info(user),
+        })
+    except Exception as error:
+        db.session.rollback()
+        return _urpa_error_response(error)
+
+
+@auth_bp.route('/urpa_reset_password', methods=['POST'])
+def urpa_reset_password():
+    data = request.get_json(silent=True) or {}
+    try:
+        identity = urpa_auth.reset_password(
+            data.get('phone', ''), data.get('code', ''), data.get('password', '')
+        )
+        user = _resolve_urpa_user(identity)
+        login_user(user, remember=True)
+        user_service.update_user_last_login(user.id)
+        return jsonify({
+            'success': True,
+            'message': 'URPA 密码已重置并登录',
+            'user': _user_info(user),
+        })
+    except Exception as error:
+        db.session.rollback()
+        return _urpa_error_response(error)
 
 @auth_bp.route('/logout', methods=['POST'])
 def logout():
@@ -207,15 +396,7 @@ def logout():
 @auth_bp.route('/check_login_status', methods=['GET'])
 def check_login_status():
     if current_user.is_authenticated:
-        user_info = {
-            'id': current_user.id,
-            'email': current_user.email,
-            'username': current_user.username or current_user.email.split('@')[0],
-            'points': current_user.points,
-            'is_admin': current_user.is_admin,
-            'avatar_url': current_user.avatar_url
-        }
-        return jsonify({'logged_in': True, 'user': user_info})
+        return jsonify({'logged_in': True, 'user': _user_info(current_user)})
     else:
         return jsonify({'logged_in': False})
 
@@ -269,14 +450,7 @@ def register_set_password():
     final_user = user_service.get_user_by_email(email)
     login_user(final_user, remember=True)
     
-    user_info = {
-        'id': final_user.id,
-        'email': final_user.email,
-        'username': final_user.username or final_user.email.split('@')[0],
-        'points': final_user.points,
-        'is_admin': final_user.is_admin,
-        'avatar_url': final_user.avatar_url
-    }
+    user_info = _user_info(final_user)
     return jsonify({'success': True, 'message': '操作成功并已登录', 'user': user_info})
 
 @auth_bp.route('/login_account', methods=['POST'])
@@ -298,15 +472,7 @@ def login_account():
         user_service.update_user_last_login(user.id)
         _check_and_sync_admin_status(user)
 
-        user_info = {
-            'id': user.id,
-            'email': user.email,
-            'username': user.username or user.email.split('@')[0],
-            'points': user.points,
-            'is_admin': user.is_admin,
-            'avatar_url': user.avatar_url
-        }
-        return jsonify({'success': True, 'message': '登录成功', 'user': user_info})
+        return jsonify({'success': True, 'message': '登录成功', 'user': _user_info(user)})
     else: # Should not happen if verify_password passed
         return jsonify({'success': False, 'message': '登录失败，用户不存在'}), 404
 
@@ -331,13 +497,7 @@ def update_username():
     if user_service.update_username(user_id, new_username):
         updated_user = user_service.get_user_by_id(user_id)
         if updated_user:
-            user_info = {
-                'id': updated_user.id,
-                'email': updated_user.email,
-                'username': updated_user.username or updated_user.email,
-                'points': updated_user.points or 0
-            }
-            return jsonify({'success': True, 'message': '用户名更新成功', 'user': user_info}), 200
+            return jsonify({'success': True, 'message': '用户名更新成功', 'user': _user_info(updated_user)}), 200
         else:
             return jsonify({'success': False, 'message': '更新失败，用户不存在'}), 404
     else:
@@ -369,14 +529,7 @@ def update_api_keys():
 
         updated_user = user_service.get_user_by_id(user_id)
         if updated_user:
-            user_info = {
-                'id': updated_user.id,
-                'email': updated_user.email,
-                'username': updated_user.username or updated_user.email,
-                'points': updated_user.points or 0,
-                'avatar_url': updated_user.avatar_url
-            }
-            return jsonify({'success': True, 'message': 'API Key 更新成功', 'user': user_info}), 200
+            return jsonify({'success': True, 'message': 'API Key 更新成功', 'user': _user_info(updated_user)}), 200
         else:
             return jsonify({'success': False, 'message': '更新失败，用户不存在'}), 404
     except Exception as e:
@@ -410,16 +563,7 @@ def get_user_info():
     if not current_user.is_authenticated:
         return jsonify({'success': False, 'message': '用户未登录'}), 401
     
-    user = current_user
-    user_info = {
-        'id': user.id,
-        'username': user.username,
-        'email': user.email,
-        'points': user.points,
-        'avatar_url': user.avatar_url
-        # Add other fields as needed
-    }
-    return jsonify({'success': True, 'user': user_info})
+    return jsonify({'success': True, 'user': _user_info(current_user)})
 
 @auth_bp.route('/update_user_profile', methods=['POST'])
 def update_user_profile():
@@ -447,15 +591,7 @@ def update_user_profile():
         
         # 获取最新的用户信息并返回
         updated_user = user_service.get_user_by_id(user_id)
-        user_info = {
-            'id': updated_user.id,
-            'email': updated_user.email,
-            'username': updated_user.username,
-            'points': updated_user.points,
-            'is_admin': updated_user.is_admin,
-            'avatar_url': updated_user.avatar_url
-        }
-        return jsonify({'success': True, 'message': '用户信息更新成功', 'user': user_info})
+        return jsonify({'success': True, 'message': '用户信息更新成功', 'user': _user_info(updated_user)})
     else:
         return jsonify({'success': False, 'message': '更新失败或用户名未改变'}), 500 
 

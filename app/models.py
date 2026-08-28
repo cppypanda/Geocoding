@@ -22,6 +22,10 @@ class User(UserMixin, db.Model):
     is_admin = db.Column(db.Boolean, default=False)
     is_deleted = db.Column(db.Boolean, nullable=False, default=False)
     deleted_at = db.Column(db.DateTime, nullable=True)
+    phone = db.Column(db.String(20), unique=True, nullable=True, index=True)
+    urpa_user_id = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    urpa_linked_at = db.Column(db.DateTime, nullable=True)
+    account_origin = db.Column(db.String(24), nullable=False, default='email', index=True)
     
     # Kept for simple key storage, but more complex relations are in UserApiKey
     amap_key = db.Column(db.String, nullable=True)

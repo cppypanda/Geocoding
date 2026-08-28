@@ -76,6 +76,16 @@
         </div>
     </div>
 
+    <div id="phoneBindingReminder" class="alert alert-primary d-none mb-0 rounded-0" role="status">
+        <div class="container-fluid d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <span><i class="bi bi-phone me-2"></i>绑定 URPA 手机号后，可在陆梧系列工具中逐步使用同一账户；现有积分和任务不会改变。</span>
+            <span>
+                <button type="button" class="btn btn-primary btn-sm" id="openPhoneBindingBtn">现在绑定</button>
+                <button type="button" class="btn btn-link btn-sm text-decoration-none" id="dismissPhoneBindingBtn">稍后提醒</button>
+            </span>
+        </div>
+    </div>
+
     <main class="main-container">
         <!-- 地址输入区域 -->
         <div class="address-input-section">
@@ -557,19 +567,43 @@
                     <div class="text-center mb-4">
                         <img src="{{ url_for('static', filename='logo_full.png') }}" alt="GeoCo Logo" style="max-height: 50px; margin-bottom:15px;">
                         <h5 class="modal-title" id="loginRegisterModalLabel" style="font-weight: 600; color: #333;">欢迎来到陆梧GeoCo</h5>
-                        <p class="text-muted small" id="loginRegisterModalSubtitle">邮箱登录/注册</p>
+                        <p class="text-muted small" id="loginRegisterModalSubtitle">优先使用 URPA 手机账户，原邮箱账户继续兼容</p>
                     </div>
 
                     <ul class="nav nav-tabs nav-fill mb-3" id="loginRegisterTabs" role="tablist">
                         <li class="nav-item" role="presentation">
-                            <button class="nav-link active" id="account-login-tab" data-bs-toggle="tab" data-bs-target="#account-login-pane" type="button" role="tab" aria-controls="account-login-pane" aria-selected="true">账号登录</button>
+                            <button class="nav-link active" id="urpa-login-tab" data-bs-toggle="tab" data-bs-target="#urpa-login-pane" type="button" role="tab" aria-controls="urpa-login-pane" aria-selected="true">手机号</button>
                         </li>
                         <li class="nav-item" role="presentation">
-                            <button class="nav-link" id="email-login-tab" data-bs-toggle="tab" data-bs-target="#email-login-pane" type="button" role="tab" aria-controls="email-login-pane" aria-selected="false">邮箱登录</button>
+                            <button class="nav-link" id="account-login-tab" data-bs-toggle="tab" data-bs-target="#account-login-pane" type="button" role="tab" aria-controls="account-login-pane" aria-selected="false">原账号</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="email-login-tab" data-bs-toggle="tab" data-bs-target="#email-login-pane" type="button" role="tab" aria-controls="email-login-pane" aria-selected="false">邮箱验证码</button>
                         </li>
                     </ul>
 
                     <div class="tab-content" id="loginRegisterTabContent">
+                        <div class="tab-pane fade show active" id="urpa-login-pane" role="tabpanel" aria-labelledby="urpa-login-tab">
+                            <form id="urpaLoginForm">
+                                <input type="hidden" id="urpaLoginMode" value="password">
+                                <div class="mb-3">
+                                    <input type="tel" inputmode="tel" autocomplete="tel" class="form-control form-control-lg" id="urpaLoginPhone" placeholder="URPA 手机号" required style="height: 48px; border-radius: 6px;">
+                                </div>
+                                <div class="mb-3">
+                                    <input type="password" autocomplete="current-password" class="form-control form-control-lg" id="urpaLoginPassword" placeholder="URPA 密码" required style="height: 48px; border-radius: 6px;">
+                                </div>
+                                <div class="input-group mb-3 d-none" id="urpaLoginCodeGroup">
+                                    <input type="text" inputmode="numeric" class="form-control form-control-lg" id="urpaLoginCode" placeholder="短信验证码" style="height: 48px; border-radius: 6px 0 0 6px;">
+                                    <button class="btn btn-outline-secondary" type="button" id="urpaLoginSendCodeBtn">获取验证码</button>
+                                </div>
+                                <div class="d-flex justify-content-between mb-3">
+                                    <a href="#" class="small text-primary" id="urpaRegisterToggle">手机号未注册？</a>
+                                    <a href="#" class="small text-primary" id="urpaResetToggle">忘记 URPA 密码</a>
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100 btn-lg mb-2" id="urpaLoginSubmitBtn" style="height: 48px; border-radius: 6px; font-weight: 500;">URPA 手机号登录</button>
+                                <small class="text-muted d-block">GeoCo 不保存您的 URPA 密码；验证成功后仅关联账户身份。</small>
+                            </form>
+                        </div>
                         <div class="tab-pane fade" id="email-login-pane" role="tabpanel" aria-labelledby="email-login-tab">
                             <form id="loginModalForm">
                                 <div class="mb-3">
@@ -589,7 +623,7 @@
                             </form>
                         </div>
 
-                        <div class="tab-pane fade show active" id="account-login-pane" role="tabpanel" aria-labelledby="account-login-tab">
+                        <div class="tab-pane fade" id="account-login-pane" role="tabpanel" aria-labelledby="account-login-tab">
                             <form id="accountLoginForm">
                                 <div class="mb-3">
                                     <input type="text" class="form-control form-control-lg" id="modalUsernameOrEmail" placeholder="邮箱 / 用户名" required style="height: 48px; border-radius: 6px;">
@@ -914,7 +948,26 @@
                                     </div>
                                     <div class="mb-3">
                                         <label for="settingsPhoneNumber" class="form-label">手机号</label>
-                                        <input type="tel" class="form-control" id="settingsPhoneNumber" readonly disabled>
+                                        <input type="tel" class="form-control" id="settingsPhoneNumber" placeholder="尚未绑定 URPA 手机号" readonly disabled>
+                                        <small class="form-text text-muted" id="settingsPhoneStatus">绑定后可继续使用原邮箱登录，积分和任务不会迁移或清空。</small>
+                                    </div>
+                                    <button type="button" class="btn btn-outline-primary mb-3" id="togglePhoneBindingBtn">绑定 URPA 手机号</button>
+                                    <div class="border rounded p-3 mb-3 d-none" id="phoneBindingPanel">
+                                        <input type="hidden" id="phoneBindingMode" value="password">
+                                        <div class="mb-2">
+                                            <input type="tel" inputmode="tel" class="form-control" id="phoneBindingPhone" placeholder="URPA 手机号">
+                                        </div>
+                                        <div class="mb-2">
+                                            <input type="password" class="form-control" id="phoneBindingPassword" placeholder="URPA 密码">
+                                        </div>
+                                        <div class="input-group mb-2 d-none" id="phoneBindingCodeGroup">
+                                            <input type="text" inputmode="numeric" class="form-control" id="phoneBindingCode" placeholder="短信验证码">
+                                            <button type="button" class="btn btn-outline-secondary" id="phoneBindingSendCodeBtn">获取验证码</button>
+                                        </div>
+                                        <div class="d-flex justify-content-between align-items-center gap-2">
+                                            <button type="button" class="btn btn-primary" id="confirmPhoneBindingBtn">验证并绑定</button>
+                                            <a href="#" class="small" id="phoneBindingRegisterToggle">手机号未注册？创建 URPA 账户</a>
+                                        </div>
                                     </div>
                                     <button type="button" class="btn btn-primary" id="saveSettingsBtn">保存更改</button>
                                     <hr>
@@ -1153,6 +1206,6 @@
         window.__POINTS_AWARD_BY_SERVICE__ = JSON.parse('{{ points_award_by_service | tojson | safe }}');
     </script>
     <script src="{{ url_for('static', filename='js/error-reporter.js') }}?v=1.0.4"></script>
-    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.5" type="module"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.6" type="module"></script>
 </body>
 </html>

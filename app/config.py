@@ -55,6 +55,10 @@ class Config:
     # URPA 同款自托管元搜索；生产环境应显式指向同机或内网 SearXNG 服务。
     SEARXNG_URL = os.environ.get('SEARXNG_URL', 'http://127.0.0.1:8888')
     SEARXNG_API_KEY = os.environ.get('SEARXNG_API_KEY')
+
+    # URPA 统一手机号账户。GeoCo 只保存外部身份映射，不保存 URPA 密码或令牌。
+    URPA_BASE_URL = os.environ.get('URPA_BASE_URL', 'https://urpa.luwug.top').rstrip('/')
+    URPA_AUTH_TIMEOUT_SECONDS = float(os.environ.get('URPA_AUTH_TIMEOUT_SECONDS', '12'))
     
     # Application constants
     REQUIRED_CONFIDENCE_THRESHOLD = 0.9

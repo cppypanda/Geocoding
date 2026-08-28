@@ -1,5 +1,5 @@
 // 主脚本文件 - 导入所有必要的模块
-import { updateUserBar, initializeAuthForms, showLoginModal } from './modules/auth.js';
+import { updateUserBar, initializeAuthForms, showLoginModal } from './modules/auth.js?v=1.0.6';
 import { showToast, convertCoordinates, checkUserPoints } from './modules/utils.js';
 import { displayCascadeResults } from './modules/ui.js';
 import { initializeMap, initializeResultsOverviewMap, updateResultsOverviewMapMarkers, ensureResultsOverviewMap, ensureCalibrationMap } from './modules/map.js';

@@ -33,12 +33,18 @@ def _mask_secret(value):
 def get_profile():
     user = user_service.get_user_by_id(current_user.id)
     if user:
+        public_email = None if user.account_origin == 'urpa' else user.email
+        fallback_name = (user.phone or 'GeoCo用户') if not public_email else public_email.split('@')[0]
         user_info = {
             'id': user.id,
-            'email': user.email,
-            'username': user.username or user.email.split('@')[0],
+            'email': public_email,
+            'username': user.username or fallback_name,
             'points': user.points,
             'avatar_url': user.avatar_url,
+            'phone': user.phone,
+            'urpa_linked': bool(user.urpa_user_id),
+            'needs_phone_binding': not bool(user.urpa_user_id),
+            'account_origin': user.account_origin or 'email',
             'amap_key': _mask_secret(user.amap_key),
             'baidu_key': _mask_secret(user.baidu_key),
             'tianditu_key': _mask_secret(user.tianditu_key),
@@ -400,6 +406,10 @@ def delete_account():
         user.email = f'deleted-{uuid.uuid4().hex}@invalid.local'
         user.username = None
         user.password_hash = generate_password_hash(secrets.token_urlsafe(32))
+        user.phone = None
+        user.urpa_user_id = None
+        user.urpa_linked_at = None
+        user.account_origin = 'deleted'
         user.avatar_url = None
         user.amap_key = None
         user.baidu_key = None

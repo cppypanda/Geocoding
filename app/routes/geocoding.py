@@ -272,10 +272,10 @@ def _charge_points_or_402(task_name, user_id):
 def pricing_estimate():
     """Return the user-facing, bounded pricing policy for a pending batch."""
     try:
-        address_count = int(request.args.get('address_count', 1))
+        address_count = int(request.args.get('address_count', 0))
     except (TypeError, ValueError):
-        address_count = 1
-    address_count = max(1, min(address_count, 500))
+        address_count = 0
+    address_count = max(0, min(address_count, 500))
     mode = str(request.args.get('mode') or 'multisource').strip().lower()
     smart_unit = get_points_cost('smart_project_address', used_user_key=False)
     web_unit = get_points_cost('web_search', used_user_key=False)

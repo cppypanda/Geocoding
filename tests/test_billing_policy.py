@@ -43,6 +43,10 @@ class BillingPolicyTests(unittest.TestCase):
         self.assertEqual(payload['base_points'], 6)
         self.assertEqual(payload['web_research_points_each'], 2)
 
+        empty = self.client.get('/geocode/pricing/estimate?mode=smart&address_count=0')
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.get_json()['base_points'], 0)
+
     @patch('app.routes.geocoding._process_batch_geocoding_async', new_callable=AsyncMock)
     def test_multisource_is_free_and_smart_is_fixed_per_address(self, process_batch):
         process_batch.return_value = {

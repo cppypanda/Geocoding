@@ -10,6 +10,11 @@ export const ENDPOINTS = {
     resetPassword: '/reset_password',
     changePassword: '/change_password',
     deleteAccount: '/user/delete_account',
+    urpaAccountStatus: '/urpa_account_status',
+    urpaSendCode: '/urpa_send_code',
+    urpaLogin: '/urpa_login',
+    urpaLink: '/urpa_link',
+    urpaResetPassword: '/urpa_reset_password',
 
     geocodeProcess: '/geocode/process',
     geocodePoiSearch: '/geocode/poi_search',
