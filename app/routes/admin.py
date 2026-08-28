@@ -4,7 +4,10 @@ from flask import Blueprint, render_template, request, jsonify, flash, redirect,
 from flask_login import login_required, current_user
 from sqlalchemy import func, or_
 
-from ..models import LocationType, User, GeocodingTask, AddressLog, Task, ErrorRecord
+from ..models import (
+    LocationType, User, GeocodingTask, AddressLog, Task, ErrorRecord,
+    InteractionEvent, PointTransaction,
+)
 from .. import db
 from functools import wraps
 
@@ -126,7 +129,24 @@ def geocoding_log_details(task_id):
     addresses_pagination = AddressLog.query.filter_by(task_id=task.id).order_by(AddressLog.id.asc()).paginate(
         page=page, per_page=per_page, error_out=False
     )
-    return render_template('admin/geocoding_log_details.html', task=task, addresses_pagination=addresses_pagination)
+    event_summary = db.session.query(
+        InteractionEvent.event_name,
+        InteractionEvent.event_source,
+        func.count(InteractionEvent.id),
+    ).filter_by(geocoding_task_id=task.id).group_by(
+        InteractionEvent.event_name,
+        InteractionEvent.event_source,
+    ).order_by(InteractionEvent.event_name).all()
+    point_transactions = PointTransaction.query.filter_by(
+        geocoding_task_id=task.id
+    ).order_by(PointTransaction.id.asc()).all()
+    return render_template(
+        'admin/geocoding_log_details.html',
+        task=task,
+        addresses_pagination=addresses_pagination,
+        event_summary=event_summary,
+        point_transactions=point_transactions,
+    )
 
 @admin_bp.route('/user_tasks')
 @admin_required

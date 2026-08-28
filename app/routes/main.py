@@ -31,8 +31,10 @@ def _safe_export_name(value):
     return name or 'geocoding_results'
 
 
-def _finish_export(response, user_id, points_to_deduct):
-    if points_to_deduct > 0 and not deduct_points(user_id, points_to_deduct):
+def _finish_export(response, user_id, points_to_deduct, task_name='export'):
+    if points_to_deduct > 0 and not deduct_points(
+        user_id, points_to_deduct, task_name=task_name
+    ):
         return jsonify({'error': f'积分不足，导出需要 {points_to_deduct} 积分'}), 402
     updated_user = user_service.get_user_by_id(user_id)
     response.headers['X-Updated-User-Points'] = str(updated_user.points if updated_user else 0)
@@ -190,7 +192,7 @@ def export_data():
                 as_attachment=True,
                 download_name=f'{location_name}.xlsx'
             )
-            return _finish_export(response, user_id, points_to_deduct)
+            return _finish_export(response, user_id, points_to_deduct, task_name)
 
         if export_format == 'kml':
             # 导出为 KML（需提供 WGS84 坐标 lng/lat）
@@ -244,7 +246,7 @@ def export_data():
                 as_attachment=True,
                 download_name=f'{location_name}.kml'
             )
-            return _finish_export(response, user_id, points_to_deduct)
+            return _finish_export(response, user_id, points_to_deduct, task_name)
 
         if export_format == 'shp':
             # 确保列名是10个字符以内，这是Shapefile的限制
@@ -275,7 +277,7 @@ def export_data():
                     as_attachment=True,
                     download_name=f'{location_name}.zip'
                 )
-                return _finish_export(response, user_id, points_to_deduct)
+                return _finish_export(response, user_id, points_to_deduct, task_name)
 
     except Exception as e:
         print(f"导出数据时出错: {e}")

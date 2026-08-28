@@ -2,6 +2,7 @@ import { getApiName, formatConfidence, formatCoordinatesHtml, getApiMarkerHtml, 
 import { showLocationOnMap, clearSearchMarkers as clearMapMarkers } from './map.js';
 import { performSmartSearch, reverseGeocode, autoSelectPoint, performMapSearch } from './api.js';
 import { clearMapSearchResults } from './ui.js';
+import { correctionMetadata, resultTrackingContext, trackInteraction } from './analytics.js';
 
 // This is a large, self-contained module for the entire calibration panel.
 let state = {
@@ -29,6 +30,22 @@ let state = {
     // 地址级别的状态存储
     addressStates: new Map(), // 存储每个地址的POI搜索结果和网络信息
 };
+
+function trackCurrentSelection(eventName, triggerOrigin, selectionMethod, correctionSource) {
+    if (!state.currentResultData) return;
+    const tracking = resultTrackingContext(state.currentResultData);
+    trackInteraction(eventName, {
+        triggerOrigin,
+        geocodingTaskId: tracking.geocoding_task_id,
+        addressLogId: tracking.address_log_id,
+        clientActionId: tracking.client_action_id,
+        metadata: correctionMetadata(
+            state.currentResultData,
+            selectionMethod,
+            correctionSource,
+        ),
+    });
+}
 
 
 // --- 地址状态管理函数 ---
@@ -239,6 +256,12 @@ function updateCalibrationMapMarkers() {
             marker.on('click', function() {
                 state.currentResultData.selected_result = { ...apiRes, selection_method_note: '用户通过地图标记点选定' };
                 if (state.onResultChanged) state.onResultChanged(state.currentResultData, state.currentIndex);
+                trackCurrentSelection(
+                    'map_candidate_selected',
+                    'human_map_candidate',
+                    'map_candidate',
+                    'provider_candidate',
+                );
                 render();
             });
 
@@ -514,7 +537,7 @@ async function hybridSelectPointFromMapSearch() {
         const originalIndex = state.mapSearchResults.findIndex(poi => poi === bestMatch);
         
         if (originalIndex !== -1) {
-            handleMapPoiSelection(originalIndex, '高置信度自动选定'); // Pass a specific reason
+            handleMapPoiSelection(originalIndex, '高置信度自动选定', 'automation_poi_confidence');
             showToast(`已自动选定高置信度匹配项: ${bestMatch.name}`, 'success');
             return { ok: true, code: 'CONFIDENCE_SHORTCUT' };
         }
@@ -528,7 +551,7 @@ async function hybridSelectPointFromMapSearch() {
             
             // Pass the reason from the LLM response to the selection handler
             const reason = data.selected_poi ? data.selected_poi.llm_reason : 'LLM智能选定';
-            handleMapPoiSelection(data.result.index, reason);
+            handleMapPoiSelection(data.result.index, reason, 'automation_poi_llm');
             return { ok: true, code: 'LLM_SUCCESS' };
         }
 
@@ -547,7 +570,7 @@ async function hybridSelectPointFromMapSearch() {
 }
 
 
-function handleMapPoiSelection(index, selectionReason = null) {
+function handleMapPoiSelection(index, selectionReason = null, triggerOrigin = 'human_map_search') {
     // FIX: Update the internal state to track the selected POI index. This was missing.
     state.selectedPoiIndex = index;
     
@@ -585,6 +608,15 @@ function handleMapPoiSelection(index, selectionReason = null) {
     if (state.onResultChanged) {
         state.onResultChanged(state.currentResultData, state.currentIndex);
     }
+
+    const fromWebIntelligence = window.__pendingPoiCorrectionSource === 'web_intelligence';
+    trackCurrentSelection(
+        fromWebIntelligence ? 'web_correction_applied' : 'map_search_result_selected',
+        triggerOrigin,
+        'map_search_result',
+        fromWebIntelligence ? 'web_intelligence' : 'poi_search',
+    );
+    if (fromWebIntelligence) window.__pendingPoiCorrectionSource = null;
     
     // Save the state for this address (including the selected POI) for caching
     if (state.currentResultData && state.currentResultData.address) {
@@ -626,6 +658,14 @@ function toggleManualMarkMode() {
         mapContainer.style.cursor = 'crosshair';
         showToast("手动选点已激活，请在地图上点击目标位置。", "info");
         state.itemCalibrationMap.on('click', onMapClickForManualMark);
+        const tracking = resultTrackingContext(state.currentResultData);
+        trackInteraction('map_manual_mark_started', {
+            triggerOrigin: 'human_manual_map',
+            buttonId: 'manualMarkBtnOnMap',
+            geocodingTaskId: tracking.geocoding_task_id,
+            addressLogId: tracking.address_log_id,
+            clientActionId: tracking.client_action_id,
+        });
     } else {
         manualMarkBtn.innerHTML = '<i class="bi bi-pin-map"></i> 手动选点';
         manualMarkBtn.classList.remove('btn-danger');
@@ -702,6 +742,12 @@ async function onMapClickForManualMark(e) {
         if (state.onResultChanged) {
             state.onResultChanged(state.currentResultData, state.currentIndex);
         }
+        trackCurrentSelection(
+            'map_manual_mark_completed',
+            'human_manual_map',
+            'manual_map_mark',
+            'manual_map',
+        );
         
         // Re-render to update UI immediately
         render();
@@ -755,6 +801,12 @@ function setupEventListeners() {
                 if (state.onResultChanged) {
                     state.onResultChanged(state.currentResultData, state.currentIndex);
                 }
+                trackCurrentSelection(
+                    'result_card_selected',
+                    e.isTrusted ? 'human_result_card' : 'automation_smart_calibration',
+                    'provider_card',
+                    'provider_candidate',
+                );
                 
                 // Re-render to update UI immediately
                 render();
@@ -791,6 +843,15 @@ function setupEventListeners() {
                 if (state.onResultChanged) {
                     state.onResultChanged(state.currentResultData, state.currentIndex);
                 }
+                const tracking = resultTrackingContext(state.currentResultData);
+                trackInteraction('result_confirmed', {
+                    triggerOrigin: 'human_result_card',
+                    buttonId: 'confirmCurrentBtn',
+                    geocodingTaskId: tracking.geocoding_task_id,
+                    addressLogId: tracking.address_log_id,
+                    clientActionId: tracking.client_action_id,
+                    success: state.currentResultData.confirmed,
+                });
             }
             return;
         }
@@ -818,7 +879,7 @@ function setupEventListeners() {
             const button = e.target.closest('button[data-action="select-poi"]');
             if (button) {
                 const index = parseInt(button.dataset.index, 10);
-                handleMapPoiSelection(index);
+                handleMapPoiSelection(index, '用户从地图搜索结果选定', 'human_map_search');
             }
         });
     }
@@ -853,10 +914,11 @@ function setupEventListeners() {
     // 用户手动输入时，解除锁定
     const mapSearchInput = document.getElementById('mapSearchInput');
     if (mapSearchInput) {
-        mapSearchInput.addEventListener('input', () => {
+        mapSearchInput.addEventListener('input', (event) => {
             // state.isKeywordLocked = false;
             // state.keywordLockRecordIndex = null;
             window.isPoiSearchLocked = false;
+            if (event.isTrusted) window.__pendingPoiCorrectionSource = null;
         });
     }
 

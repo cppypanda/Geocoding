@@ -187,6 +187,29 @@ class ApiRequestLog(db.Model):
 
     __table_args__ = (db.UniqueConstraint('user_id', 'service_name', 'request_date', name='_user_service_date_uc'),)
 
+
+class PointTransaction(db.Model):
+    """Immutable audit trail for point charges and automatic refunds."""
+
+    __tablename__ = 'point_transactions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    geocoding_task_id = db.Column(
+        db.Integer,
+        db.ForeignKey('geocoding_tasks.id'),
+        nullable=True,
+        index=True,
+    )
+    transaction_type = db.Column(db.String(16), nullable=False, index=True)
+    task_key = db.Column(db.String(64), nullable=False, index=True)
+    points_delta = db.Column(db.Integer, nullable=False)
+    balance_after = db.Column(db.Integer, nullable=False)
+    operation_id = db.Column(db.String(128), nullable=False, index=True)
+    idempotency_key = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    reason = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
+
 class BonusRewardLog(db.Model):
     __tablename__ = 'bonus_reward_logs'
     id = db.Column(db.Integer, primary_key=True)
@@ -198,6 +221,12 @@ class GeocodingTask(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     task_name = db.Column(db.String(255), nullable=True)
+    run_mode = db.Column(db.String(32), nullable=False, default='multisource', index=True)
+    trigger_origin = db.Column(db.String(64), nullable=False, default='unknown', index=True)
+    client_session_id = db.Column(db.String(64), nullable=True, index=True)
+    client_action_id = db.Column(db.String(64), nullable=True, index=True)
+    semantic_web_search_performed = db.Column(db.Boolean, nullable=False, default=False)
+    semantic_web_search_success = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     # Relationship to AddressLog
@@ -207,9 +236,53 @@ class AddressLog(db.Model):
     __tablename__ = 'address_logs'
     id = db.Column(db.Integer, primary_key=True)
     task_id = db.Column(db.Integer, db.ForeignKey('geocoding_tasks.id'), nullable=False, index=True)
+    address_index = db.Column(db.Integer, nullable=True)
     address_keyword = db.Column(db.String(512), nullable=False)
     confidence = db.Column(db.Float, nullable=True)
+    initial_source = db.Column(db.String(64), nullable=True, index=True)
+    initial_latitude_wgs84 = db.Column(db.Float, nullable=True)
+    initial_longitude_wgs84 = db.Column(db.Float, nullable=True)
+    final_source = db.Column(db.String(64), nullable=True, index=True)
+    final_confidence = db.Column(db.Float, nullable=True)
+    final_latitude_wgs84 = db.Column(db.Float, nullable=True)
+    final_longitude_wgs84 = db.Column(db.Float, nullable=True)
+    selection_method = db.Column(db.String(64), nullable=True, index=True)
+    correction_source = db.Column(db.String(64), nullable=True, index=True)
+    corrected = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    web_search_used = db.Column(db.Boolean, nullable=False, default=False, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class InteractionEvent(db.Model):
+    """A structured, privacy-bounded product analytics event."""
+
+    __tablename__ = 'interaction_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    geocoding_task_id = db.Column(
+        db.Integer,
+        db.ForeignKey('geocoding_tasks.id'),
+        nullable=True,
+        index=True,
+    )
+    address_log_id = db.Column(
+        db.Integer,
+        db.ForeignKey('address_logs.id'),
+        nullable=True,
+        index=True,
+    )
+    client_event_id = db.Column(db.String(64), nullable=True, unique=True, index=True)
+    client_action_id = db.Column(db.String(64), nullable=True, index=True)
+    client_session_id = db.Column(db.String(64), nullable=True, index=True)
+    event_name = db.Column(db.String(80), nullable=False, index=True)
+    event_source = db.Column(db.String(16), nullable=False, index=True)
+    trigger_origin = db.Column(db.String(64), nullable=False, default='unknown', index=True)
+    button_id = db.Column(db.String(80), nullable=True, index=True)
+    success = db.Column(db.Boolean, nullable=True)
+    metadata_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
 
 
 class ErrorRecord(db.Model):

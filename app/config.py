@@ -138,18 +138,19 @@ class Config:
         'reverse_geocoding':      {'standard': 0, 'discount': 0},  # 逆地理编码 (坐标 -> 地址)
         
         # POI 搜索功能
-        'poi_search_amap':        {'standard': 1, 'discount': 0},  # 使用 高德进行POI搜索
-        'poi_search_baidu':       {'standard': 1, 'discount': 0},  # 使用百度进行POI搜索
+        'poi_search_amap':        {'standard': 0, 'discount': 0},  # POI 候选检索免费
+        'poi_search_baidu':       {'standard': 0, 'discount': 0},  # POI 候选检索免费
         'poi_search_tianditu':    {'standard': 0, 'discount': 0},  # 使用天地图进行POI搜索 (通常是免费或有有条件限制)
 
         # 增值智能服务
         'llm_call':               {'standard': 2, 'discount': 2},  # 任何一次对大语言模型的调用 (例如：智能选点、智能纠错等)
         'web_search':             {'standard': 2, 'discount': 2},  # 网络智能搜索功能
+        'smart_project_address':  {'standard': 2, 'discount': 2},  # 智能编码项目基础价（每个地址）
 
         # 导出功能
-        'export_xlsx':            {'standard': 5, 'discount': 5},  # 导出为 XLSX 文件
-        'export_kml':             {'standard': 5, 'discount': 5},  # 导出为 KML 文件
-        'export_shp':             {'standard': 5, 'discount': 5},  # 导出为 SHP 文件
+        'export_xlsx':            {'standard': 0, 'discount': 0},  # 基础成果导出免费
+        'export_kml':             {'standard': 0, 'discount': 0},
+        'export_shp':             {'standard': 0, 'discount': 0},
     }
 
     # 4. 用户推荐奖励

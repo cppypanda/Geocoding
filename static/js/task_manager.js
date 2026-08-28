@@ -1,5 +1,6 @@
 import { fetchAPI } from './modules/api.js';
 import { escapeHtml } from './modules/utils.js';
+import { trackInteraction } from './modules/analytics.js';
 
 // console.log("task_manager.js script loaded.");
 
@@ -273,6 +274,15 @@ export function initializeTaskManager() {
                         body: JSON.stringify({ result_data: extendedData })
                     });
                     window.showToast(data.success ? '任务更新成功！' : (data.error || '任务更新失败'), data.success ? 'success' : 'danger');
+                    if (data.success) {
+                        const tracking = window.currentGeocodingTracking || {};
+                        trackInteraction('task_saved', {
+                            triggerOrigin: 'human_task_save',
+                            geocodingTaskId: tracking.task_id,
+                            clientActionId: tracking.client_action_id,
+                            success: true,
+                        });
+                    }
                 } catch (error) {
                     console.error('更新任务失败:', error);
                     window.showToast('网络错误，更新失败', 'danger');
@@ -387,6 +397,13 @@ export function initializeTaskManager() {
 
                 if (data.success) {
                     window.showToast('任务保存成功！', 'success');
+                    const tracking = window.currentGeocodingTracking || {};
+                    trackInteraction('task_saved', {
+                        triggerOrigin: 'human_task_save',
+                        geocodingTaskId: tracking.task_id,
+                        clientActionId: tracking.client_action_id,
+                        success: true,
+                    });
                     const saveTaskModal = getSaveTaskModal();
                     if (saveTaskModal) saveTaskModal.hide();
                     currentLoadedTask = { id: data.task_id, name: taskName };

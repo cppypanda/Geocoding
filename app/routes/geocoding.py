@@ -4,21 +4,103 @@ import json
 import time
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import jionlp as jio
 from sqlalchemy import func, update
 
-from flask import Blueprint, request, jsonify, session, current_app, send_file
+from flask import (
+    Blueprint, request, jsonify, session, current_app, send_file,
+    g, has_request_context,
+)
 from flask_login import login_required, current_user
 
 from ..services import geocoding_apis, poi_search, llm_service
 from ..services.web_search_local import search_web
 from ..utils import geo_transforms, decorators, api_managers, address_processing
 from ..utils.log_context import request_context_var
-from ..models import LocationType, User, ApiRequestLog, db, GeocodingTask, AddressLog
+from ..models import (
+    LocationType,
+    User,
+    ApiRequestLog,
+    db,
+    GeocodingTask,
+    AddressLog,
+    InteractionEvent,
+    PointTransaction,
+)
 from ..services import user_service
 
 geocoding_bp = Blueprint('geocoding', __name__, url_prefix='/geocode')
+
+_CLIENT_ID_RE = re.compile(r'^[A-Za-z0-9._-]{8,64}$')
+_TASK_TRIGGER_ORIGINS = {
+    'human_multisource', 'human_smart_oneclick', 'automation_programmatic',
+}
+_INTERACTION_EVENT_NAMES = {
+    'button_exposed', 'geocode_multisource_clicked', 'geocode_smart_clicked',
+    'smart_calibration_clicked', 'smart_calibration_completed',
+    'web_search_started', 'web_search_completed', 'web_keyword_applied',
+    'web_correction_applied', 'map_candidate_selected', 'result_card_selected',
+    'map_search_result_selected', 'map_manual_mark_started',
+    'map_manual_mark_completed', 'result_confirmed', 'task_saved',
+    'export_clicked',
+}
+_TRIGGER_ORIGINS = {
+    'human_multisource', 'human_smart_oneclick', 'human_smart_calibration',
+    'human_map_candidate', 'human_result_card', 'human_map_search',
+    'human_manual_map', 'human_web_intelligence', 'human_web_keyword',
+    'human_task_save', 'human_export',
+    'automation_oneclick', 'automation_smart_calibration',
+    'automation_poi_confidence', 'automation_poi_llm',
+    'automation_web_intelligence', 'system', 'unknown',
+    'automation_programmatic',
+}
+_EVENT_METADATA_KEYS = {
+    'address_index', 'run_mode', 'provider', 'previous_source', 'final_source',
+    'selection_method', 'correction_source', 'confidence_before',
+    'confidence_after', 'latitude_wgs84', 'longitude_wgs84',
+    'candidate_count', 'selected_index', 'web_search_result_count',
+    'keyword_count', 'export_format',
+}
+
+
+def _clean_client_id(value):
+    value = str(value or '').strip()
+    return value if _CLIENT_ID_RE.fullmatch(value) else None
+
+
+def _optional_record_id(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError
+    return parsed
+
+
+def _clean_event_metadata(value):
+    if not isinstance(value, dict):
+        return {}
+    cleaned = {}
+    for key in _EVENT_METADATA_KEYS:
+        item = value.get(key)
+        if isinstance(item, bool) or item is None:
+            cleaned[key] = item
+        elif isinstance(item, (int, float)):
+            cleaned[key] = item
+        elif isinstance(item, str):
+            cleaned[key] = item[:160]
+    return cleaned
+
+
+def _event_source_for_origin(origin):
+    if origin.startswith('human_'):
+        return 'human'
+    if origin.startswith('automation_'):
+        return 'automation'
+    return 'system'
 
 # 地理编码结果的内存缓存，用于"逐一校准"功能
 geocoding_session_data = {} # {session_id: {address: [results]}}
@@ -33,12 +115,35 @@ def load_session_results(session_id, original_address):
     """从内存缓存加载地理编码结果"""
     return geocoding_session_data.get(session_id, {}).get(original_address)
 
-def deduct_points(user_id, points_to_deduct):
-    """Atomically deduct points and return whether the balance was sufficient."""
+def _billing_operation_id():
+    if has_request_context():
+        existing = getattr(g, 'billing_operation_id', None)
+        if existing:
+            return existing
+        candidate = (request.headers.get('X-Request-ID') or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9._-]{8,128}', candidate):
+            candidate = str(uuid.uuid4())
+        g.billing_operation_id = candidate
+        return candidate
+    return str(uuid.uuid4())
+
+
+def deduct_points(
+    user_id,
+    points_to_deduct,
+    task_name='manual_adjustment',
+    operation_id=None,
+    geocoding_task_id=None,
+):
+    """Atomically deduct points and write an idempotent audit entry."""
     if not user_id or points_to_deduct <= 0:
         return True
 
+    operation_id = operation_id or _billing_operation_id()
+    idempotency_key = f'charge:{operation_id}:{task_name}'
     try:
+        if PointTransaction.query.filter_by(idempotency_key=idempotency_key).first():
+            return True
         result = db.session.execute(
             update(User)
             .where(
@@ -50,6 +155,19 @@ def deduct_points(user_id, points_to_deduct):
         if result.rowcount != 1:
             db.session.rollback()
             return False
+        balance_after = db.session.execute(
+            db.select(User.points).where(User.id == user_id)
+        ).scalar_one()
+        db.session.add(PointTransaction(
+            user_id=user_id,
+            geocoding_task_id=geocoding_task_id,
+            transaction_type='charge',
+            task_key=task_name,
+            points_delta=-points_to_deduct,
+            balance_after=balance_after,
+            operation_id=operation_id,
+            idempotency_key=idempotency_key,
+        ))
         db.session.commit()
         return True
     except Exception as e:
@@ -58,29 +176,127 @@ def deduct_points(user_id, points_to_deduct):
         return False
 
 
-def refund_points(user_id, points):
+def refund_points(
+    user_id,
+    points,
+    task_name=None,
+    operation_id=None,
+    reason='系统处理失败自动退还',
+    geocoding_task_id=None,
+):
     if not user_id or points <= 0:
-        return
+        return False
+    operation_id = operation_id or (
+        getattr(g, 'billing_operation_id', None) if has_request_context() else None
+    ) or str(uuid.uuid4())
+    task_name = task_name or (
+        getattr(g, 'billing_task_name', None) if has_request_context() else None
+    ) or 'unknown'
+    idempotency_key = f'refund:{operation_id}:{task_name}'
     try:
+        if PointTransaction.query.filter_by(idempotency_key=idempotency_key).first():
+            return True
         db.session.execute(
             update(User)
             .where(User.id == user_id)
             .values(points=func.coalesce(User.points, 0) + points)
         )
+        balance_after = db.session.execute(
+            db.select(User.points).where(User.id == user_id)
+        ).scalar_one()
+        db.session.add(PointTransaction(
+            user_id=user_id,
+            geocoding_task_id=geocoding_task_id,
+            transaction_type='refund',
+            task_key=task_name,
+            points_delta=points,
+            balance_after=balance_after,
+            operation_id=operation_id,
+            idempotency_key=idempotency_key,
+            reason=str(reason or '')[:255] or None,
+        ))
         db.session.commit()
+        return True
     except Exception as exc:
         db.session.rollback()
         current_app.logger.error('退还用户 %s 积分失败: %s', user_id, exc, exc_info=True)
+        return False
+
+
+def _active_smart_task_from_headers(user_id):
+    if not has_request_context() or not user_id:
+        return None
+    try:
+        task_id = int(request.headers.get('X-Geocoding-Task-ID') or 0)
+    except (TypeError, ValueError):
+        return None
+    if task_id <= 0:
+        return None
+    task = db.session.get(GeocodingTask, task_id)
+    if not task or task.user_id != user_id or task.run_mode != 'smart':
+        return None
+    action_id = _clean_client_id(request.headers.get('X-Geocoding-Action-ID'))
+    if task.client_action_id and action_id != task.client_action_id:
+        return None
+    if not task.created_at or task.created_at < datetime.utcnow() - timedelta(hours=24):
+        return None
+    return task
 
 
 def _charge_points_or_402(task_name, user_id):
+    # A smart-project fee covers its model decisions. Web research remains a
+    # separately priced, explicit add-on.
+    included_task = _active_smart_task_from_headers(user_id)
+    if task_name == 'llm_call' and included_task:
+        return 0, None, None
+
     points = get_points_cost(task_name, used_user_key=False)
-    if points > 0 and not deduct_points(user_id, points):
+    operation_id = _billing_operation_id()
+    if has_request_context():
+        g.billing_task_name = task_name
+    if points > 0 and not deduct_points(
+        user_id,
+        points,
+        task_name=task_name,
+        operation_id=operation_id,
+        geocoding_task_id=included_task.id if included_task else None,
+    ):
         return points, jsonify({
             'success': False,
             'message': f'积分不足，本次操作需要 {points} 积分',
         }), 402
     return points, None, None
+
+
+@geocoding_bp.route('/pricing/estimate', methods=['GET'])
+def pricing_estimate():
+    """Return the user-facing, bounded pricing policy for a pending batch."""
+    try:
+        address_count = int(request.args.get('address_count', 1))
+    except (TypeError, ValueError):
+        address_count = 1
+    address_count = max(1, min(address_count, 500))
+    mode = str(request.args.get('mode') or 'multisource').strip().lower()
+    smart_unit = get_points_cost('smart_project_address', used_user_key=False)
+    web_unit = get_points_cost('web_search', used_user_key=False)
+    if mode != 'smart':
+        return jsonify({
+            'success': True,
+            'mode': 'multisource',
+            'address_count': address_count,
+            'base_points': 0,
+            'web_research_points_each': web_unit,
+            'label': '多源编码免费',
+        })
+    return jsonify({
+        'success': True,
+        'mode': 'smart',
+        'address_count': address_count,
+        'unit_points': smart_unit,
+        'base_points': smart_unit * address_count,
+        'web_research_points_each': web_unit,
+        'label': f'智能编码 {smart_unit * address_count} 积分',
+    })
 
 
 def get_points_cost(task_name, used_user_key, token_count=0):
@@ -322,10 +538,19 @@ async def _post_process_winner(winner, user_id, parsed_original_address):
     # --- 逆地理编码 ---
     return await _perform_reverse_geocoding(winner, user_id, parsed_original_address)
 
-async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = False):
+async def _process_batch_geocoding_async(
+    raw_addresses,
+    user_id,
+    debug: bool = False,
+    tracking_context=None,
+):
     """
     Asynchronous core logic for batch geocoding based on SOP.
     """
+    tracking_context = tracking_context or {}
+    run_mode = tracking_context.get('run_mode', 'multisource')
+    trigger_origin = tracking_context.get('trigger_origin', 'unknown')
+
     # SOP 步骤 1: 对所有地址进行预处理 - 行政区划补全
     current_app.logger.info(f"SOP第1步：开始对 {len(raw_addresses)} 个地址进行预处理（行政区划补全）...")
     
@@ -335,13 +560,20 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
     current_app.logger.info("SOP第1步：所有地址预处理完成。")
     
     # SOP Part A: 批量语义预分析（并行执行，但在主流程中同步等待）
-    semantic_analysis_result = None
+    semantic_analysis_result = {
+        'theme_name': f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        'search_needed': False,
+        'enhanced': False,
+    }
     try:
-        current_app.logger.info("开始批量语义预分析...")
-        completed_addresses = [item['completed_address'] for item in pre_processed_data]
-        semantic_analysis_result = await llm_service.batch_semantic_analysis(
-            completed_addresses, user_id=user_id
-        )
+        if run_mode == 'smart':
+            current_app.logger.info("开始批量语义预分析...")
+            completed_addresses = [item['completed_address'] for item in pre_processed_data]
+            semantic_analysis_result = await llm_service.batch_semantic_analysis(
+                completed_addresses, user_id=user_id, allow_web_search=False
+            )
+        else:
+            current_app.logger.info('多源编码模式跳过语义预分析和自动联网，保持免费基础管线。')
         if semantic_analysis_result and not semantic_analysis_result.get('error'):
             current_app.logger.info(f"批量语义预分析完成，主题名称: {semantic_analysis_result.get('theme_name', '未知')}")
         else:
@@ -382,7 +614,13 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
                 task_name = semantic_analysis_result.get('theme_name', f"地理编码任务于 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
                 log_task = GeocodingTask(
                     user_id=user_id,
-                    task_name=task_name
+                    task_name=task_name,
+                    run_mode=run_mode,
+                    trigger_origin=trigger_origin,
+                    client_session_id=tracking_context.get('client_session_id'),
+                    client_action_id=tracking_context.get('client_action_id'),
+                    semantic_web_search_performed=False,
+                    semantic_web_search_success=False,
                 )
                 db.session.add(log_task)
                 db.session.flush()  # Use flush to get the ID before full commit
@@ -492,23 +730,47 @@ async def _process_batch_geocoding_async(raw_addresses, user_id, debug: bool = F
     if log_task: # Only proceed if the parent task was created successfully
         try:
             logs_to_add = []
-            for result_item in all_results_for_frontend:
+            logged_results = []
+            for address_index, result_item in enumerate(all_results_for_frontend):
                 original_address = result_item.get('address')
                 selected_result = result_item.get('selected_result', {})
                 confidence = selected_result.get('confidence')
+                result_details = selected_result.get('result') or {}
+                initial_source = selected_result.get('api') or selected_result.get('source_api')
 
                 if original_address:
                     log_entry = AddressLog(
                         task_id=log_task.id,
+                        address_index=address_index,
                         address_keyword=original_address,
-                        confidence=confidence
+                        confidence=confidence,
+                        initial_source=initial_source,
+                        initial_latitude_wgs84=result_details.get('latitude_wgs84'),
+                        initial_longitude_wgs84=result_details.get('longitude_wgs84'),
+                        final_source=initial_source,
+                        final_confidence=confidence,
+                        final_latitude_wgs84=result_details.get('latitude_wgs84'),
+                        final_longitude_wgs84=result_details.get('longitude_wgs84'),
+                        selection_method='cascade',
+                        corrected=False,
+                        web_search_used=False,
                     )
                     logs_to_add.append(log_entry)
+                    logged_results.append(result_item)
             
             if logs_to_add:
-                db.session.bulk_save_objects(logs_to_add)
-            
+                db.session.add_all(logs_to_add)
+                db.session.flush()
+                for result_item, log_entry in zip(logged_results, logs_to_add):
+                    result_item['tracking_address_log_id'] = log_entry.id
+
             db.session.commit()
+            response_data['tracking'] = {
+                'task_id': log_task.id,
+                'client_action_id': tracking_context.get('client_action_id'),
+                'run_mode': run_mode,
+                'trigger_origin': trigger_origin,
+            }
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f"Failed to save AddressLog entries for task_id {log_task.id}: {e}")
@@ -523,6 +785,8 @@ def geocode_address_batch():
     (SOP V3.0) Main batch geocoding API endpoint (Sync Wrapper).
     Orchestrates the entire process based on the SOP by calling the async core.
     """
+    charged_points = 0
+    billing_operation_id = None
     try:
         data = request.get_json()
         if not data:
@@ -538,30 +802,191 @@ def geocode_address_batch():
 
         user_id = current_user.id if current_user.is_authenticated else None
 
+        requested_mode = str(data.get('mode') or 'default').strip().lower()
+        run_mode = 'smart' if requested_mode == 'smart' else 'multisource'
+        requested_origin = str(data.get('trigger_origin') or '').strip()
+        expected_origin = 'human_smart_oneclick' if run_mode == 'smart' else 'human_multisource'
+        trigger_origin = requested_origin if requested_origin in _TASK_TRIGGER_ORIGINS else expected_origin
+        tracking_context = {
+            'run_mode': run_mode,
+            'trigger_origin': trigger_origin,
+            'client_session_id': _clean_client_id(data.get('client_session_id')),
+            'client_action_id': _clean_client_id(data.get('client_action_id')),
+        }
+
+        if run_mode == 'smart':
+            unit_points = get_points_cost('smart_project_address', used_user_key=False)
+            charged_points = unit_points * len(raw_addresses)
+            billing_operation_id = _billing_operation_id()
+            g.billing_task_name = 'smart_project_address'
+            if charged_points > 0 and not deduct_points(
+                user_id,
+                charged_points,
+                task_name='smart_project_address',
+                operation_id=billing_operation_id,
+            ):
+                return jsonify({
+                    'success': False,
+                    'results': [],
+                    'message': (
+                        f'积分不足，本次智能编码需要 {charged_points} 积分；'
+                        '多源编码可免费使用'
+                    ),
+                    'required_points': charged_points,
+                }), 402
+
         # Debug flag
         debug = bool(data.get('debug')) and current_user.is_admin
         # Run the async core logic
-        response_data = asyncio.run(_process_batch_geocoding_async(raw_addresses, user_id, debug))
+        response_data = asyncio.run(_process_batch_geocoding_async(
+            raw_addresses,
+            user_id,
+            debug,
+            tracking_context,
+        ))
+        tracking_task_id = (response_data.get('tracking') or {}).get('task_id')
+        if billing_operation_id and tracking_task_id:
+            charge_entry = PointTransaction.query.filter_by(
+                idempotency_key=(
+                    f'charge:{billing_operation_id}:smart_project_address'
+                )
+            ).first()
+            if charge_entry and not charge_entry.geocoding_task_id:
+                charge_entry.geocoding_task_id = tracking_task_id
+                db.session.commit()
         
         results = response_data.get('results', [])
         failed_count = sum(
             1 for item in results
             if (item.get('selected_result') or {}).get('api') == 'error'
         )
-        all_failed = bool(results) and failed_count == len(results)
+        all_failed = not results or failed_count == len(results)
+        if all_failed and charged_points:
+            refund_points(
+                user_id,
+                charged_points,
+                task_name='smart_project_address',
+                operation_id=billing_operation_id,
+                reason='全部地图服务失败，自动退还智能项目费用',
+                geocoding_task_id=tracking_task_id,
+            )
+            charged_points = 0
         response_status = 502 if all_failed else 200
+        updated_user = user_service.get_user_by_id(user_id)
         return jsonify({
             'success': not all_failed,
             'results': results,
             'failed_count': failed_count,
             'message': '所有地图服务均未返回可用结果' if all_failed else None,
             'semantic_analysis': response_data.get('semantic_analysis'),
-            'debug': response_data.get('debug') if debug else None
+            'debug': response_data.get('debug') if debug else None,
+            'tracking': response_data.get('tracking'),
+            'billing': {
+                'mode': run_mode,
+                'charged_points': charged_points,
+                'web_research_points_each': get_points_cost('web_search', False),
+                'balance': updated_user.points if updated_user else None,
+            },
         }), response_status
 
     except Exception as e:
+        if charged_points:
+            refund_points(
+                current_user.id,
+                charged_points,
+                task_name='smart_project_address',
+                operation_id=billing_operation_id,
+                reason='智能编码任务异常，自动退还项目费用',
+            )
         current_app.logger.error(f"批量地理编码主路由发生异常: {e}", exc_info=True)
         return jsonify({'success': False, 'results': [], 'message': '服务器内部错误'}), 500
+
+
+@geocoding_bp.route('/interaction_events', methods=['POST'])
+@login_required
+def record_interaction_event():
+    """Persist a bounded analytics event and update the address's final snapshot."""
+    data = request.get_json(silent=True) or {}
+    event_name = str(data.get('event_name') or '').strip()
+    trigger_origin = str(data.get('trigger_origin') or 'unknown').strip()
+    if event_name not in _INTERACTION_EVENT_NAMES:
+        return jsonify({'success': False, 'message': '不支持的事件类型'}), 400
+    if trigger_origin not in _TRIGGER_ORIGINS:
+        return jsonify({'success': False, 'message': '不支持的触发来源'}), 400
+
+    client_event_id = _clean_client_id(data.get('client_event_id'))
+    if client_event_id:
+        existing = InteractionEvent.query.filter_by(
+            client_event_id=client_event_id,
+            user_id=current_user.id,
+        ).first()
+        if existing:
+            return jsonify({'success': True, 'event_id': existing.id, 'duplicate': True})
+
+    try:
+        task_id = _optional_record_id(data.get('geocoding_task_id'))
+        address_log_id = _optional_record_id(data.get('address_log_id'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': '记录ID格式无效'}), 400
+    task = None
+    address_log = None
+    if task_id is not None:
+        task = db.session.get(GeocodingTask, task_id)
+        if not task or task.user_id != current_user.id:
+            return jsonify({'success': False, 'message': '任务不存在'}), 404
+    if address_log_id is not None:
+        address_log = db.session.get(AddressLog, address_log_id)
+        if not address_log:
+            return jsonify({'success': False, 'message': '地址记录不存在'}), 404
+        address_task = db.session.get(GeocodingTask, address_log.task_id)
+        if not address_task or address_task.user_id != current_user.id:
+            return jsonify({'success': False, 'message': '地址记录不存在'}), 404
+        if task and address_log.task_id != task.id:
+            return jsonify({'success': False, 'message': '地址记录与任务不匹配'}), 400
+        task = task or address_task
+
+    metadata = _clean_event_metadata(data.get('metadata'))
+    event = InteractionEvent(
+        user_id=current_user.id,
+        geocoding_task_id=task.id if task else None,
+        address_log_id=address_log.id if address_log else None,
+        client_event_id=client_event_id,
+        client_action_id=_clean_client_id(data.get('client_action_id')),
+        client_session_id=_clean_client_id(data.get('client_session_id')),
+        event_name=event_name,
+        event_source=_event_source_for_origin(trigger_origin),
+        trigger_origin=trigger_origin,
+        button_id=str(data.get('button_id') or '')[:80] or None,
+        success=data.get('success') if isinstance(data.get('success'), bool) else None,
+        metadata_json=json.dumps(metadata, ensure_ascii=False, separators=(',', ':')) or None,
+    )
+
+    if address_log:
+        if event_name in {'web_search_completed', 'web_keyword_applied', 'web_correction_applied'}:
+            address_log.web_search_used = True
+        if event_name in {
+            'web_correction_applied', 'map_candidate_selected',
+            'result_card_selected', 'map_search_result_selected',
+            'map_manual_mark_completed',
+        }:
+            address_log.corrected = True
+            address_log.final_source = metadata.get('final_source') or address_log.final_source
+            address_log.final_confidence = metadata.get('confidence_after')
+            address_log.final_latitude_wgs84 = metadata.get('latitude_wgs84')
+            address_log.final_longitude_wgs84 = metadata.get('longitude_wgs84')
+            address_log.selection_method = metadata.get('selection_method') or event_name
+            address_log.correction_source = metadata.get('correction_source') or event_name
+            if event_name == 'web_correction_applied':
+                address_log.web_search_used = True
+
+    try:
+        db.session.add(event)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.error('Failed to persist interaction event', exc_info=True)
+        return jsonify({'success': False, 'message': '事件记录失败'}), 500
+    return jsonify({'success': True, 'event_id': event.id})
 
 # === Web Intelligence (三步骤) 路由 ===
 @geocoding_bp.route('/web_intelligence/search_collate', methods=['POST'])

@@ -1,5 +1,6 @@
 import { showToast, showLoading, hideLoading } from './utils.js';
 import { shouldCalibrateConfidence } from './smart-calibration-targets.js';
+import { trackInteraction } from './analytics.js';
 
 // Helper function to introduce a delay
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -133,7 +134,7 @@ async function waitForResultUpdate(initialAddressText, timeout = 500) {
 }
 
 
-async function calibrateSingleAddress(row, rowIndex) {
+async function calibrateSingleAddress(row, rowIndex, options = {}) {
     const originalAddress = row.querySelector('td:nth-child(2)').textContent.trim();
     // console.log(`%c--- [DEBUG] Starting Calibration for row ${rowIndex + 1}: "${originalAddress}" ---`, 'color: blue; font-weight: bold;');
 
@@ -193,6 +194,10 @@ async function calibrateSingleAddress(row, rowIndex) {
 
         // 2.3. Keyword Suggestions
         // console.log('[DEBUG] Step 2.3: POI search failed, trying keywords...');
+        if (!options.allowWebResearch) {
+            showToast(`地址 "${originalAddress}" 暂未确认；可手动校正或启用联网核验。`, 'info');
+            return false;
+        }
         
         // Step A: Get Web Info
         // console.log('[DEBUG] Step 2.3a: Getting web info...');
@@ -237,7 +242,7 @@ async function calibrateSingleAddress(row, rowIndex) {
     }
 }
 
-export async function startSmartCalibration() {
+export async function startSmartCalibration(options = {}) {
     // console.log("Starting Smart Calibration process...");
     showLoading("正在启动智能校准...");
 
@@ -263,6 +268,9 @@ export async function startSmartCalibration() {
     hideLoading();
     showToast(`发现 ${rowsToCalibrate.length} 条地址需要校准，流程开始...`, 'info');
     
+    const allowWebResearch = options.allowWebResearch ?? Boolean(
+        document.getElementById('allowSmartWebResearch')?.checked
+    );
     let successCount = 0;
     let failCount = 0;
 
@@ -272,7 +280,7 @@ export async function startSmartCalibration() {
         const originalAddress = row.querySelector('td:nth-child(2)').textContent.trim();
         showLoading(`正在校准: ${originalAddress.substring(0, 15)}... (${successCount + failCount + 1}/${rowsToCalibrate.length})`);
         
-        const success = await calibrateSingleAddress(row, rowIndex);
+        const success = await calibrateSingleAddress(row, rowIndex, { allowWebResearch });
         if (success) {
             successCount++;
         } else {
@@ -284,6 +292,14 @@ export async function startSmartCalibration() {
     
     hideLoading();
     showToast(`智能校准完成。成功: ${successCount}, 失败: ${failCount}`, 'success');
+    const tracking = window.currentGeocodingTracking || {};
+    trackInteraction('smart_calibration_completed', {
+        triggerOrigin: options.triggerOrigin || 'automation_smart_calibration',
+        geocodingTaskId: tracking.task_id,
+        clientActionId: tracking.client_action_id,
+        success: failCount === 0,
+        metadata: { candidate_count: rowsToCalibrate.length },
+    });
 
     // Smoothly scroll to the batch results processing section
     try {

@@ -34,6 +34,13 @@ export async function fetchAPI(url, options = {}) {
     if (csrfToken) {
         defaultHeaders['X-CSRFToken'] = csrfToken;
     }
+    const activeTracking = window.currentGeocodingTracking || null;
+    if (activeTracking?.task_id) {
+        defaultHeaders['X-Geocoding-Task-ID'] = String(activeTracking.task_id);
+    }
+    if (activeTracking?.client_action_id) {
+        defaultHeaders['X-Geocoding-Action-ID'] = String(activeTracking.client_action_id);
+    }
 
     const config = {
         ...options,
@@ -113,7 +120,7 @@ function updateUserState(user) {
  * @param {string[]} locationTags - Tags for location type.
  * @returns {Promise<object>} The server's response data.
  */
-export async function geocodeAddresses(addresses, mode = 'default', locationTags = []) {
+export async function geocodeAddresses(addresses, mode = 'default', locationTags = [], trackingContext = {}) {
     try {
         showLoading('正在地理编码...');
         // console.log('开始地理编码请求:', { addresses, mode, locationTags });
@@ -122,13 +129,19 @@ export async function geocodeAddresses(addresses, mode = 'default', locationTags
             addresses: addresses,
             mode: mode,
             location_tags: locationTags,
-            user_id: window.currentUser ? window.currentUser.id : null
+            user_id: window.currentUser ? window.currentUser.id : null,
+            trigger_origin: trackingContext.trigger_origin,
+            client_session_id: trackingContext.client_session_id,
+            client_action_id: trackingContext.client_action_id,
         };
 
         const data = await fetchAPI(ENDPOINTS.geocodeProcess, {
             method: 'POST',
             body: JSON.stringify(payload)
         });
+        if (data?.billing && Number.isFinite(data.billing.balance)) {
+            updateUserState({ points: data.billing.balance });
+        }
 
         // console.log('地理编码响应数据:', data);
 

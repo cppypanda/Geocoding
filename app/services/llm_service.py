@@ -924,7 +924,12 @@ async def validate_poi_with_dossier(original_address: str, poi_candidates: list,
             'mismatch_reasons': ['内部错误']
         }
 
-async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10, user_id: int = None) -> dict:
+async def batch_semantic_analysis(
+    addresses: list,
+    max_sample_size: int = 10,
+    user_id: int = None,
+    allow_web_search: bool = False,
+) -> dict:
     """
     批量语义预分析功能 - 根据SOP_Intelligent_Entity_Resolution.md Part A实现
     
@@ -1006,7 +1011,7 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10, us
             }
         
         # 3. 条件性网络搜索 (Slow Path)
-        if search_needed and search_query:
+        if search_needed and search_query and allow_web_search:
             try:
                 current_app.logger.info(f"语义预分析 Slow Path: 开始联网搜索，search_query='{search_query}'")
                 # 使用现有的联网搜索功能
@@ -1109,7 +1114,10 @@ async def batch_semantic_analysis(addresses: list, max_sample_size: int = 10, us
                 }
         
         # 如果不需要搜索，直接返回初步分析结果
-        current_app.logger.info("语义预分析 Slow Path: 未触发（无需联网搜索）")
+        if search_needed:
+            current_app.logger.info("语义预分析 Slow Path: 用户未授权联网，已跳过搜索")
+        else:
+            current_app.logger.info("语义预分析 Slow Path: 未触发（无需联网搜索）")
         return {
             'theme_name': theme_name,
             'search_needed': search_needed,

@@ -19,8 +19,46 @@
             <p><strong>任务ID:</strong> {{ task.id }}</p>
             <p><strong>任务名称:</strong> {{ task.task_name }}</p>
             <p><strong>用户:</strong> {{ task.user.email if task.user else 'N/A' }} (ID: {{ task.user_id }})</p>
+            <p><strong>编码模式:</strong> {{ '智能编码' if task.run_mode == 'smart' else '多源编码' }}</p>
+            <p><strong>触发来源:</strong> {{ task.trigger_origin }}</p>
+            <p><strong>语义预分析联网:</strong> {{ '成功' if task.semantic_web_search_success else ('执行但未成功' if task.semantic_web_search_performed else '未执行') }}</p>
             <p><strong>创建时间:</strong> {{ task.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
         </div>
+    </div>
+
+    <h4>交互事件汇总</h4>
+    <div class="table-responsive mb-4">
+        <table class="table table-sm table-bordered">
+            <thead><tr><th>事件</th><th>来源</th><th>次数</th></tr></thead>
+            <tbody>
+                {% for event_name, event_source, event_count in event_summary %}
+                <tr><td>{{ event_name }}</td><td>{{ event_source }}</td><td>{{ event_count }}</td></tr>
+                {% else %}
+                <tr><td colspan="3" class="text-center text-muted">暂无交互事件</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h4>积分流水</h4>
+    <div class="table-responsive mb-4">
+        <table class="table table-sm table-bordered">
+            <thead><tr><th>类型</th><th>计费项</th><th>积分变化</th><th>余额</th><th>原因</th><th>时间</th></tr></thead>
+            <tbody>
+                {% for entry in point_transactions %}
+                <tr>
+                    <td>{{ '扣费' if entry.transaction_type == 'charge' else '退款' }}</td>
+                    <td>{{ entry.task_key }}</td>
+                    <td>{{ '%+d'|format(entry.points_delta) }}</td>
+                    <td>{{ entry.balance_after }}</td>
+                    <td>{{ entry.reason or '-' }}</td>
+                    <td>{{ entry.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted">暂无积分流水</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 
     <h4>地址解析记录</h4>
@@ -31,6 +69,10 @@
                     <th scope="col">记录ID</th>
                     <th scope="col">地址关键词</th>
                     <th scope="col">置信度</th>
+                    <th scope="col">初始来源</th>
+                    <th scope="col">最终来源</th>
+                    <th scope="col">校正方式</th>
+                    <th scope="col">网络资料</th>
                 </tr>
             </thead>
             <tbody>
@@ -51,10 +93,14 @@
                             <span class="badge bg-secondary">N/A</span>
                         {% endif %}
                     </td>
+                    <td>{{ address.initial_source or '-' }}</td>
+                    <td>{{ address.final_source or '-' }}</td>
+                    <td>{{ address.correction_source or ('未校正' if not address.corrected else '-') }}</td>
+                    <td>{{ '是' if address.web_search_used else '否' }}</td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="3" class="text-center">该任务没有地址解析记录。</td>
+                    <td colspan="7" class="text-center">该任务没有地址解析记录。</td>
                 </tr>
                 {% endfor %}
             </tbody>

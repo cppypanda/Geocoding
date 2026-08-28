@@ -12,7 +12,7 @@ import { cleanAddresses } from './address-cleaner.js';
  * @param {boolean} isSmartMode - Whether the geocoding is in smart mode.
  * @returns {object|null} An object containing currentResults and selectedResults, or null on failure.
  */
-export async function handleGeocodeClick(addressInputModule, resultsOverviewMap, isSmartMode = false) {
+export async function handleGeocodeClick(addressInputModule, resultsOverviewMap, options = {}) {
     if (!addressInputModule) {
         console.error("Address input module is not initialized.");
         return null;
@@ -71,7 +71,13 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
         // 使用全局加载遮罩由 geocodeAddresses 内部控制
         
         try {
-            const data = await geocodeAddresses(addresses, isSmartMode ? 'smart' : 'default', locationTags);
+            const runMode = options.run_mode === 'smart' ? 'smart' : 'multisource';
+            const data = await geocodeAddresses(
+                addresses,
+                runMode === 'smart' ? 'smart' : 'default',
+                locationTags,
+                options,
+            );
             
             if (!data || !data.results) {
                 console.error('地理编码结果无效:', data);
@@ -110,8 +116,9 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
         }
 
         // 修复：确保每个结果都带有api_results字段
-        const currentResults = data.results.map(r => ({
+        const currentResults = data.results.map((r, index) => ({
             ...r,
+            tracking_address_index: index,
             api_results: Array.isArray(r.api_results) ? r.api_results : []
         }));
         const selectedResults = getSelectedResults(currentResults);
@@ -120,6 +127,7 @@ export async function handleGeocodeClick(addressInputModule, resultsOverviewMap,
         try {
             window.currentResults = currentResults;
             window.selectedResults = selectedResults;
+            window.currentGeocodingTracking = data.tracking || null;
         } catch (e) {
             // 忽略在严格模式或非浏览器环境下的赋值异常
         }

@@ -1,5 +1,5 @@
 import { performMapSearch, autoSelectPoint } from './api.js';
-import { showToast, showLoading, hideLoading, checkUserPoints } from './utils.js';
+import { showToast, showLoading, hideLoading } from './utils.js';
 import { displayMapSearchResults } from './ui.js';
 
 let state = {
@@ -14,9 +14,7 @@ export function getPoiResults() {
     return state.poiResults;
 }
 
-async function handlePoiSearch() {
-    if (!checkUserPoints()) return;
-
+async function handlePoiSearch(searchTriggerOrigin = 'human_map_search') {
     const input = document.getElementById('mapSearchInput');
     const keyword = input.value.trim();
     const source = document.getElementById('map-search-source').value;
@@ -50,7 +48,10 @@ async function handlePoiSearch() {
 
             if (bestMatch && typeof bestMatch.confidence === 'number' && bestMatch.confidence >= 0.90) {
                 if (state.onPoiSelected) {
-                    state.onPoiSelected(bestMatch);
+                    state.onPoiSelected(bestMatch, {
+                        triggerOrigin: 'automation_poi_confidence',
+                        searchTriggerOrigin,
+                    });
                     showToast(`已自动选定高置信度匹配项: ${bestMatch.name}`, 'success');
                 }
             } else {
@@ -103,9 +104,7 @@ function handleResultClick(e) {
     hideLoading();
 }
 
-async function handleIntelligentSelect(addressToUse = null) {
-    if (!checkUserPoints()) return;
-
+async function handleIntelligentSelect(addressToUse = null, triggerOrigin = 'automation_poi_llm') {
     if (!window.currentUser) {
         showToast('请先登录', 'warning');
         return;
@@ -153,7 +152,7 @@ async function handleIntelligentSelect(addressToUse = null) {
                 
                 if (state.onPoiSelected) {
                     // console.log('[DEBUG] 5. 准备调用onPoiSelected回调函数，将选择的POI传递给主脚本处理。');
-                    state.onPoiSelected(selectedPoi);
+                    state.onPoiSelected(selectedPoi, { triggerOrigin });
                 }
                 showToast(`智能选择成功: ${selectedPoi.name}`, 'success');
                 
@@ -193,18 +192,22 @@ export function initializeMapSearch(map, onPoiSelectedCallback) {
     const intelligentSelectBtn = document.getElementById('intelligentSelectBtn');
 
     if (searchBtn) {
-        searchBtn.addEventListener('click', handlePoiSearch);
+        searchBtn.addEventListener('click', (event) => {
+            handlePoiSearch(event.isTrusted ? 'human_map_search' : 'automation_smart_calibration');
+        });
     }
     if(searchInput) {
         searchInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                handlePoiSearch();
+                handlePoiSearch('human_map_search');
             }
         });
     }
 
     if (intelligentSelectBtn) {
-        intelligentSelectBtn.addEventListener('click', handleIntelligentSelect);
+        intelligentSelectBtn.addEventListener('click', (event) => {
+            handleIntelligentSelect(null, event.isTrusted ? 'human_map_search' : 'automation_poi_llm');
+        });
     }
 
     if (resultsTableBody) {

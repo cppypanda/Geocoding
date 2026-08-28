@@ -11,10 +11,11 @@ import { initializeAddressCleaner } from './modules/address-cleaner.js';
 import { initializeAddressInput } from './modules/address-input.js';
 import { handleGeocodeClick, handleAutoSelect } from './modules/geocoding.js';
 import { ENDPOINTS, SELECTORS } from './modules/constants.js';
-import { startSmartCalibration } from './modules/smart-calibration.js?v=1.0.4';
+import { startSmartCalibration } from './modules/smart-calibration.js?v=1.0.5';
 import { initializeMapSearch, getPoiResults } from './modules/map-search.js';
 import { initializeNotifications } from './modules/notifications.js';
 import { exportData, fetchAPI } from './modules/api.js';
+import { createActionContext, trackButtonExposureOnce, trackInteraction } from './modules/analytics.js';
 
 // 确保模块在全局可用
 window.webIntelligence = webIntelligence;
@@ -32,6 +33,36 @@ let itemCalibrationMap = null;
 let calibrationPanel = null;
 let __resultsPage = 1;
 let __resultsPerPage = 15;
+let __pricingEstimateTimer = null;
+
+function addressCountForPricing() {
+    const textarea = document.getElementById('addresses');
+    if (!textarea) return 1;
+    return Math.max(1, textarea.value.split('\n').filter(line => line.trim()).length);
+}
+
+async function updatePricingEstimate() {
+    const target = document.getElementById('pricingEstimate');
+    if (!target) return;
+    const count = addressCountForPricing();
+    try {
+        const response = await fetch(`/geocode/pricing/estimate?mode=smart&address_count=${count}`, {
+            headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) throw new Error('pricing unavailable');
+        const data = await response.json();
+        target.textContent = `多源编码免费；本批智能编码 ${data.base_points} 积分（${data.unit_points}积分/条），仅实际触发联网核验时另加 ${data.web_research_points_each} 积分/条；系统异常自动退还。`;
+        const smartButton = document.getElementById('smartGeocodeBtn');
+        if (smartButton) smartButton.title = `本批基础费用 ${data.base_points} 积分`;
+    } catch (_) {
+        target.textContent = '多源编码免费；智能编码按地址数计费，联网核验单独计费；系统异常自动退还。';
+    }
+}
+
+function schedulePricingEstimate() {
+    clearTimeout(__pricingEstimateTimer);
+    __pricingEstimateTimer = setTimeout(updatePricingEstimate, 180);
+}
 
 // 级联结果表格点击处理
 function handleCascadeTableClick(event) {
@@ -70,8 +101,9 @@ function initializeButtons() {
     const smartGeocodeBtn = document.getElementById('smartGeocodeBtn');
     
     if (normalGeocodeBtn) {
-        normalGeocodeBtn.addEventListener('click', () => {
-            handleGeocode('normal');
+        normalGeocodeBtn.addEventListener('click', (event) => {
+            const action = createActionContext('multisource', 'human_multisource');
+            handleGeocode('normal', action);
             // 点击“地理编码”后，显式显示并启用“智能校准”按钮
             try {
                 const calibrateBtn = document.getElementById('smartCalibrationBtn');
@@ -85,59 +117,27 @@ function initializeButtons() {
     }
     
     if (smartGeocodeBtn) {
-        smartGeocodeBtn.addEventListener('click', () => {
-            if (!checkUserPoints()) return;
-
-            // handleGeocode('smart'); // 旧的逻辑
-            
-            // 新的“一键智能编码”逻辑
-            const geocodeBtn = document.getElementById('normalGeocodeBtn');
+        smartGeocodeBtn.addEventListener('click', async () => {
             const calibrateBtn = document.getElementById('smartCalibrationBtn');
-            const resultsTableBody = document.getElementById('cascadeResultsBody');
-
-            if (!geocodeBtn || !calibrateBtn || !resultsTableBody) {
-                showToast('页面组件不完整，无法执行一键操作。', 'error');
-                return;
-            }
-
-            // “智能编码”已包含校准流程，隐藏“智能校准”按钮
             try {
-                calibrateBtn.style.display = 'none';
+                if (calibrateBtn) calibrateBtn.style.display = 'none';
                 window.__lastGeocodeAction = 'oneclick';
             } catch (e) { }
-
-            // 1. 禁用按钮，防止重复点击
             smartGeocodeBtn.disabled = true;
             smartGeocodeBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> 处理中...';
-
-            // 2. 触发地理编码
-            geocodeBtn.click();
-            showToast('多源编码已启动...', 'info');
-
-            // 3. 设置观察器以等待编码结果
-            const observer = new MutationObserver((mutationsList, obs) => {
-                // 检查是否有子节点（即结果行）被添加
-                if (resultsTableBody.children.length > 0) {
+            const action = createActionContext('smart', 'human_smart_oneclick');
+            action.auto_calibrate_after_login = true;
+            try {
+                showToast('多源编码已启动...', 'info');
+                const result = await handleGeocode('smart', action);
+                if (result) {
                     showToast('多源编码完成，即将开始智能校准。', 'success');
-                    
-                    // 4. 触发智能校准
-                    // 加一个短暂的延迟，确保UI渲染完成
-                    setTimeout(() => {
-                        calibrateBtn.click();
-                    }, 500);
-
-                    // 5. 清理工作
-                    obs.disconnect(); // 停止观察
-                    
-                    // 恢复按钮状态
-                    smartGeocodeBtn.disabled = false;
-                    smartGeocodeBtn.innerHTML = '<i class="bi bi-stars"></i> 智能编码';
+                    await startSmartCalibration({ triggerOrigin: 'automation_oneclick' });
                 }
-            });
-
-            // 配置观察器：观察子节点的变动
-            const config = { childList: true };
-            observer.observe(resultsTableBody, config);
+            } finally {
+                smartGeocodeBtn.disabled = false;
+                smartGeocodeBtn.innerHTML = '<i class="bi bi-stars"></i> 智能编码';
+            }
         });
     }
     
@@ -808,7 +808,7 @@ function initializeButtons() {
     // 初始化POI地图搜索
     const poiMap = ensureCalibrationMap('itemCalibrationMap');
     if (poiMap) {
-        initializeMapSearch(poiMap, (selectedPoi) => {
+        initializeMapSearch(poiMap, (selectedPoi, selectionContext = {}) => {
             // console.log('[DEBUG] 6. onPoiSelected回调函数在script.js中被触发，接收到选择的POI:', selectedPoi);
             if (window.calibrationPanel) {
                 const allPoiResults = getPoiResults();
@@ -820,7 +820,11 @@ function initializeButtons() {
                         window.calibrationPanel.setMapSearchResults(allPoiResults);
                     }
                     // console.log('[DEBUG] 8. 准备调用校准面板的handleMapPoiSelection方法来更新UI。');
-                    window.calibrationPanel.handleMapPoiSelection(selectedIndex, '地址查找工具选定');
+                    window.calibrationPanel.handleMapPoiSelection(
+                        selectedIndex,
+                        '地址查找工具选定',
+                        selectionContext.triggerOrigin || 'human_map_search',
+                    );
                 } else {
                     // console.log('[DEBUG] 8a. 错误：接收到的POI在当前列表中找不到，无法更新UI。');
                     showToast('在结果列表中未找到选定的POI', 'error');
@@ -874,9 +878,17 @@ function initializeButtons() {
     // 智能校准按钮
     const smartCalibrationBtn = document.getElementById('smartCalibrationBtn');
     if (smartCalibrationBtn) {
-        smartCalibrationBtn.addEventListener('click', () => {
+        smartCalibrationBtn.addEventListener('click', (event) => {
             if (!checkUserPoints()) return;
-            startSmartCalibration();
+            if (!event.isTrusted) return;
+            const tracking = window.currentGeocodingTracking || {};
+            trackInteraction('smart_calibration_clicked', {
+                triggerOrigin: 'human_smart_calibration',
+                buttonId: 'smartCalibrationBtn',
+                geocodingTaskId: tracking.task_id,
+                clientActionId: tracking.client_action_id,
+            });
+            startSmartCalibration({ triggerOrigin: 'human_smart_calibration' });
         });
     }
 
@@ -970,6 +982,15 @@ function initializeButtons() {
 
             // 发送请求
             const { blob, points } = await exportData(selectedExportFormat, data, safeName);
+            const tracking = window.currentGeocodingTracking || {};
+            trackInteraction('export_clicked', {
+                triggerOrigin: 'human_export',
+                buttonId: 'confirmExportBtn',
+                geocodingTaskId: tracking.task_id,
+                clientActionId: tracking.client_action_id,
+                success: true,
+                metadata: { export_format: selectedExportFormat },
+            });
             
             // 如果返回了新的积分，则更新UI
             if (points !== null && !isNaN(points)) {
@@ -1031,7 +1052,7 @@ function initializeButtons() {
 }
 
 // 地理编码处理
-async function handleGeocode(mode) {
+async function handleGeocode(mode, actionContext = null) {
     
     const geocodingTip = document.getElementById('geocoding-tip');
     const textarea = document.getElementById('addresses');
@@ -1060,10 +1081,15 @@ async function handleGeocode(mode) {
     if (!user) {
         showToast('请先登录后开始使用', 'warning');
         // 设置登录后要执行的动作
-        window.actionAfterLogin = () => handleGeocode(mode);
+        window.actionAfterLogin = async () => {
+            const resumedResult = await handleGeocode(mode, actionContext);
+            if (resumedResult && actionContext?.auto_calibrate_after_login) {
+                await startSmartCalibration({ triggerOrigin: 'automation_oneclick' });
+            }
+        };
         // 显示登录模态框
         showLoginModal();
-        return;
+        return null;
     }
     
     if (!textarea || !textarea.value.trim()) {
@@ -1089,18 +1115,41 @@ async function handleGeocode(mode) {
         const resultsOverviewMap = window.resultsOverviewMap || null;
         
         // 调用地理编码处理函数
-        const isSmartMode = mode === 'smart';
-        
-        const result = await handleGeocodeClick(addressInputModule, resultsOverviewMap, isSmartMode);
+        const context = actionContext || createActionContext(
+            mode === 'smart' ? 'smart' : 'multisource',
+            'automation_programmatic',
+        );
+        const clickedEvent = mode === 'smart' ? 'geocode_smart_clicked' : 'geocode_multisource_clicked';
+        trackInteraction(clickedEvent, {
+            triggerOrigin: context.trigger_origin,
+            buttonId: mode === 'smart' ? 'smartGeocodeBtn' : 'normalGeocodeBtn',
+            clientActionId: context.client_action_id,
+            metadata: { run_mode: context.run_mode },
+        });
+
+        const result = await handleGeocodeClick(addressInputModule, resultsOverviewMap, context);
         
         if (result) {
             showToast('地理编码完成', 'success');
-        } else {
+            const tracking = window.currentGeocodingTracking || {};
+            for (const buttonId of [
+                'smartCalibrationBtn', 'saveResultsBtn', 'exportExcelBtn',
+                'exportKmlBtn', 'exportShpBtn',
+            ]) {
+                trackButtonExposureOnce(buttonId, {
+                    triggerOrigin: 'system',
+                    geocodingTaskId: tracking.task_id,
+                    clientActionId: tracking.client_action_id,
+                });
+            }
+            return result;
         }
+        return null;
         
     } catch (error) {
         showToast('地理编码处理失败: ' + error.message, 'error');
         if (geocodingTip) geocodingTip.style.display = 'none'; // 出错时隐藏提示
+        return null;
     }
 }
 
@@ -1117,6 +1166,8 @@ async function checkUserLoginStatus() {
                 currentUser = data.user;
             }
             updateUserBar(data.user);
+            trackButtonExposureOnce('normalGeocodeBtn', { triggerOrigin: 'system' });
+            trackButtonExposureOnce('smartGeocodeBtn', { triggerOrigin: 'system' });
         } else {
             window.currentUser = null;
             if (typeof currentUser !== 'undefined') {
@@ -1253,6 +1304,8 @@ async function initializePage() {
     // 初始化地址输入模块并保存到全局作用域
     const addressInputModule = initializeAddressInput();
     window.addressInputModule = addressInputModule;
+    if (addressesElement) addressesElement.addEventListener('input', schedulePricingEstimate);
+    updatePricingEstimate();
     
     // 添加测试函数到全局作用域以便调试
     window.testAddressCleaning = function() {

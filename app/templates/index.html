@@ -180,6 +180,15 @@
                         <div class="main-action-buttons">
                             <button type="button" class="btn btn-outline-secondary me-2 action-btn-normal" id="normalGeocodeBtn"><i class="bi bi-geo-alt"></i> 多源编码</button>
                             <button type="button" class="btn btn-primary btn-lg me-2 action-btn-smart" id="smartGeocodeBtn"><i class="bi bi-stars"></i> 智能编码</button>
+                            <div id="pricingEstimate" class="small text-muted mt-2" aria-live="polite">
+                                多源编码免费；智能编码按本批地址数预先显示费用，系统异常自动退还。
+                            </div>
+                            <div class="form-check form-switch d-inline-flex align-items-center gap-2 mt-2">
+                                <input class="form-check-input" type="checkbox" role="switch" id="allowSmartWebResearch">
+                                <label class="form-check-label small" for="allowSmartWebResearch">
+                                    POI无法确认时允许联网核验（额外计费）
+                                </label>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1144,6 +1153,6 @@
         window.__POINTS_AWARD_BY_SERVICE__ = JSON.parse('{{ points_award_by_service | tojson | safe }}');
     </script>
     <script src="{{ url_for('static', filename='js/error-reporter.js') }}?v=1.0.4"></script>
-    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.4" type="module"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}?v=1.0.5" type="module"></script>
 </body>
 </html>

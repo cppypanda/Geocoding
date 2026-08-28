@@ -1,5 +1,6 @@
 import { showToast, checkUserPoints, escapeHtml } from './utils.js';
 import { fetchAPI } from './api.js';
+import { resultTrackingContext, trackInteraction } from './analytics.js';
 
 // 智能地址情报三步骤模块
 class WebIntelligenceManager {
@@ -93,13 +94,13 @@ class WebIntelligenceManager {
         }
 
         // 第一步：搜集信息按钮
-        document.getElementById('step1SearchBtn')?.addEventListener('click', () => {
-            this.executeStep1();
+        document.getElementById('step1SearchBtn')?.addEventListener('click', (event) => {
+            this.executeStep1(event.isTrusted ? 'human_web_intelligence' : 'automation_web_intelligence');
         });
 
         // 第三步：生成关键词建议按钮
-        document.getElementById('step3SuggestBtn')?.addEventListener('click', () => {
-            this.executeStep3();
+        document.getElementById('step3SuggestBtn')?.addEventListener('click', (event) => {
+            this.executeStep3(event.isTrusted ? 'human_web_intelligence' : 'automation_web_intelligence');
         });
 
         // 步骤控制按钮
@@ -180,7 +181,7 @@ class WebIntelligenceManager {
     }
 
     // 第一步：搜集摘录地址信息
-    async executeStep1() {
+    async executeStep1(triggerOrigin = 'human_web_intelligence') {
         if (!checkUserPoints()) return;
 
         // 以输入框中的最新地址为准
@@ -204,6 +205,16 @@ class WebIntelligenceManager {
             btn.disabled = true;
             resultsDiv.style.display = 'none';
 
+            const currentResult = window.currentResults?.[this.currentIndex];
+            const tracking = resultTrackingContext(currentResult);
+            trackInteraction('web_search_started', {
+                triggerOrigin,
+                buttonId: 'step1SearchBtn',
+                geocodingTaskId: tracking.geocoding_task_id,
+                addressLogId: tracking.address_log_id,
+                clientActionId: tracking.client_action_id,
+            });
+
             // 调用后端API
             const data = await fetchAPI('/geocode/web_intelligence/search_collate', {
                 method: 'POST',
@@ -223,6 +234,16 @@ class WebIntelligenceManager {
                 }
                 
                 showToast('信息搜集完成', 'success');
+                trackInteraction('web_search_completed', {
+                    triggerOrigin,
+                    geocodingTaskId: tracking.geocoding_task_id,
+                    addressLogId: tracking.address_log_id,
+                    clientActionId: tracking.client_action_id,
+                    success: true,
+                    metadata: {
+                        web_search_result_count: data.dossier?.web_search_results_count || 0,
+                    },
+                });
             } else {
                 throw new Error(data.message || data.error || '搜集信息失败');
             }
@@ -255,13 +276,13 @@ class WebIntelligenceManager {
     }
 
     // 第三步：生成关键词建议
-    async executeStep3() {
+    async executeStep3(triggerOrigin = 'human_web_intelligence') {
         if (!checkUserPoints()) return;
 
         // 若尚未完成信息搜集，则自动执行第一步后再生成关键词
         if (!this.dossier) {
             try {
-                await this.executeStep1();
+                await this.executeStep1(triggerOrigin);
             } catch (e) {
                 // 忽略，后续会判断dossier是否存在
             }
@@ -348,7 +369,10 @@ class WebIntelligenceManager {
                 `;
             }).join('');
             keywordsList.querySelectorAll('.use-keyword-btn').forEach((button, index) => {
-                button.addEventListener('click', () => this.useKeywordForSearch(suggestions[index].query));
+                button.addEventListener('click', (event) => this.useKeywordForSearch(
+                    suggestions[index].query,
+                    event.isTrusted ? 'human_web_keyword' : 'automation_web_intelligence',
+                ));
             });
         }
 
@@ -356,7 +380,7 @@ class WebIntelligenceManager {
     }
 
     // 使用关键词进行搜索
-    useKeywordForSearch(keyword) {
+    useKeywordForSearch(keyword, triggerOrigin = 'human_web_keyword') {
         // 将关键词填入POI搜索框并触发搜索
         const mapSearchInput = document.getElementById('mapSearchInput');
         if (mapSearchInput) {
@@ -366,7 +390,19 @@ class WebIntelligenceManager {
             // 解决问题：防止POI选点后，校准面板的地址自动回填覆盖搜索关键词
             try {
                 window.isPoiSearchLocked = true;
+                window.__pendingPoiCorrectionSource = 'web_intelligence';
             } catch (e) { console.warn(e); }
+
+            const currentResult = window.currentResults?.[this.currentIndex];
+            const tracking = resultTrackingContext(currentResult);
+            trackInteraction('web_keyword_applied', {
+                triggerOrigin,
+                buttonId: 'use-keyword-btn',
+                geocodingTaskId: tracking.geocoding_task_id,
+                addressLogId: tracking.address_log_id,
+                clientActionId: tracking.client_action_id,
+                metadata: { keyword_count: this.keywordSuggestions.length },
+            });
             
             // 触发搜索按钮点击
             document.getElementById('mapSearchBtn')?.click();
